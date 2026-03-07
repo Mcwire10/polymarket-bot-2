@@ -102,8 +102,14 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             # Garantizar mínimo 5 shares para Polymarket
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
             monto_minimo_shares = round(5 * precio_impl + 0.50, 2)  # 5 shares + margen
+            limite_riesgo = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO, 2)
+
+            if monto_minimo_shares > limite_riesgo:
+                trades_abiertos -= 1  # revertir contador
+                print(f"⏭️ Skip: necesita ${monto_minimo_shares} pero límite es ${limite_riesgo}")
+                return False
+
             monto_final = max(STAKE, monto_minimo_shares)
-            monto_final = min(monto_final, SALDO_INICIAL * MAX_PORCENTAJE_SALDO)
             print(f"💵 Monto trade: ${monto_final} (precio: {precio_impl:.2f}, mín shares OK)")
             result = client.trade(
                 market_id=trade_id,
