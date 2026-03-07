@@ -9,7 +9,7 @@ from simmer_sdk import SimmerClient
 SIMMER_API_KEY = os.environ.get("SIMMER_API_KEY")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-STAKE = float(os.environ.get("MAX_USD", "5"))
+STAKE = float(os.environ.get("MAX_USD", "1"))
 
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
