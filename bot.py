@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import threading
+import math
 from simmer_sdk import SimmerClient
 
 # === CONFIG ===
@@ -13,10 +14,7 @@ STAKE = float(os.environ.get("MAX_USD", "1"))
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
-# Umbral mínimo de edge para apostar con bot propio (ej: 0.08 = 8%)
 EDGE_THRESHOLD = 0.08
-
-# Rango de precio válido para copy trading
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
@@ -58,7 +56,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None):
             notify(msg)
             return True
         except Exception as e:
-            err = f"❌ Error ejecutando trade: {e}\nMercado: {market_id[:30]}..."
+            err = f"❌ Error ejecutando trade: {e}\nMercado: {str(market_id)[:40]}..."
             print(err)
             notify(err)
             return False
@@ -96,10 +94,8 @@ def motor_copy_trading():
                     if not asset or not side or price <= 0:
                         continue
 
-                    # Marcar como visto siempre (para no reprocesar)
                     trades_copiados.add(trade_id)
 
-                    # Filtro de precio — solo copiamos si hay margen
                     if side not in ("BUY", "YES"):
                         continue
                     if not (COPY_MIN_PRICE <= price <= COPY_MAX_PRICE):
@@ -120,20 +116,17 @@ def motor_copy_trading():
             time.sleep(30)
 
 # ============================================================
-# MOTOR 2: BOT CLIMÁTICO (Open-Meteo + Polymarket)
+# MOTOR 2: BOT CLIMÁTICO
 # ============================================================
-
-# Ciudades con coordenadas para consultar Open-Meteo
 CIUDADES = {
-    "New York":     {"lat": 40.71, "lon": -74.01},
-    "Los Angeles":  {"lat": 34.05, "lon": -118.24},
-    "Miami":        {"lat": 25.77, "lon": -80.19},
-    "Chicago":      {"lat": 41.88, "lon": -87.63},
-    "London":       {"lat": 51.51, "lon": -0.13},
+    "New York":    {"lat": 40.71, "lon": -74.01},
+    "Los Angeles": {"lat": 34.05, "lon": -118.24},
+    "Miami":       {"lat": 25.77, "lon": -80.19},
+    "Chicago":     {"lat": 41.88, "lon": -87.63},
+    "London":      {"lat": 51.51, "lon": -0.13},
 }
 
 def get_precipitacion_prob(ciudad):
-    """Obtiene probabilidad de precipitación de Open-Meteo (gratuito, sin API key)"""
     coords = CIUDADES.get(ciudad)
     if not coords:
         return None
@@ -147,16 +140,14 @@ def get_precipitacion_prob(ciudad):
         r = requests.get(url, timeout=10)
         data = r.json()
         prob = data["daily"]["precipitation_probability_max"][0]
-        return prob / 100.0  # convertir a 0-1
+        return prob / 100.0
     except Exception as e:
         print(f"⚠️ [CLIMA] Error Open-Meteo para {ciudad}: {e}")
         return None
 
-def get_mercados_clima():
-    """Busca mercados activos de clima en Polymarket"""
-    keywords = ["rain", "rainfall", "precipitation", "storm", "snow", "temperature", "weather"]
+def get_mercados_polymarket(keywords):
     mercados = []
-    for keyword in keywords[:3]:  # limitamos para no spamear
+    for keyword in keywords:
         try:
             url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20&search={keyword}"
             r = requests.get(url, timeout=10)
@@ -165,48 +156,37 @@ def get_mercados_clima():
                 mercados.extend(data)
             time.sleep(1)
         except Exception as e:
-            print(f"⚠️ [CLIMA] Error buscando mercados '{keyword}': {e}")
+            print(f"⚠️ Error buscando mercados '{keyword}': {e}")
     return mercados
 
-def analizar_mercado_clima(mercado):
-    """
-    Analiza un mercado de clima y decide si hay edge.
-    Retorna (side, edge) o None si no hay oportunidad.
-    """
-    pregunta = mercado.get("question", "").lower()
-    precio_yes = None
-
-    # Intentar obtener precio YES
+def get_precio_yes(mercado):
     try:
         tokens = mercado.get("tokens", [])
         for token in tokens:
             if token.get("outcome", "").upper() == "YES":
-                precio_yes = float(token.get("price", 0))
-                break
-        if precio_yes is None:
-            precio_yes = float(mercado.get("bestAsk", 0) or mercado.get("lastTradePrice", 0))
+                return float(token.get("price", 0))
+        return float(mercado.get("bestAsk", 0) or mercado.get("lastTradePrice", 0))
     except:
         return None
 
+def analizar_mercado_clima(mercado):
+    pregunta = mercado.get("question", "").lower()
+    precio_yes = get_precio_yes(mercado)
     if not precio_yes or precio_yes <= 0:
         return None
 
-    # Detectar ciudad mencionada en la pregunta
     ciudad_detectada = None
     for ciudad in CIUDADES.keys():
         if ciudad.lower() in pregunta:
             ciudad_detectada = ciudad
             break
-
     if not ciudad_detectada:
         return None
 
-    # Obtener probabilidad real de Open-Meteo
     prob_real = get_precipitacion_prob(ciudad_detectada)
     if prob_real is None:
         return None
 
-    # Calcular edge
     edge_yes = prob_real - precio_yes
     edge_no  = (1 - prob_real) - (1 - precio_yes)
 
@@ -216,29 +196,25 @@ def analizar_mercado_clima(mercado):
         return ("yes", edge_yes)
     elif edge_no >= EDGE_THRESHOLD:
         return ("no", edge_no)
-
     return None
 
-mercados_apostados = set()
+mercados_clima_apostados = set()
 
 def motor_climatico():
     print("🌦️ [CLIMA] Motor climático iniciado")
     while True:
         try:
-            mercados = get_mercados_clima()
-            print(f"🌦️ [CLIMA] {len(mercados)} mercados de clima encontrados")
-
+            mercados = get_mercados_polymarket(["rain", "rainfall", "storm"])
+            print(f"🌦️ [CLIMA] {len(mercados)} mercados encontrados")
             for mercado in mercados:
                 market_id = mercado.get("conditionId") or mercado.get("id")
-                if not market_id or market_id in mercados_apostados:
+                if not market_id or market_id in mercados_clima_apostados:
                     continue
-
                 resultado = analizar_mercado_clima(mercado)
                 if resultado:
                     side, edge = resultado
                     pregunta = mercado.get("question", "")[:60]
-                    print(f"🎯 [CLIMA] Edge encontrado! {side.upper()} | Edge: {edge:.2f} | {pregunta}")
-
+                    print(f"🎯 [CLIMA] Edge! {side.upper()} | Edge: {edge:.2f} | {pregunta}")
                     ok = ejecutar_trade(
                         market_id=market_id,
                         side=side,
@@ -246,30 +222,203 @@ def motor_climatico():
                         precio_ref=edge
                     )
                     if ok:
-                        mercados_apostados.add(market_id)
-
-            # Revisar mercados de clima cada 10 minutos
+                        mercados_clima_apostados.add(market_id)
             time.sleep(600)
-
         except Exception as e:
             print(f"❌ [CLIMA] Error general: {e}")
             time.sleep(60)
 
 # ============================================================
+# MOTOR 3: BOT CRYPTO
+# ============================================================
+
+# Distribución normal acumulada (sin scipy)
+def norm_cdf(x):
+    return 0.5 * (1 + math.erf(x / math.sqrt(2)))
+
+def get_precio_crypto(symbol):
+    """Precio actual desde CoinGecko (gratuito, sin API key)"""
+    ids = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+    }
+    cg_id = ids.get(symbol)
+    if not cg_id:
+        return None
+    try:
+        url = f"https://api.coingecko.com/api/v3/simple/price?ids={cg_id}&vs_currencies=usd"
+        r = requests.get(url, timeout=10)
+        return float(r.json()[cg_id]["usd"])
+    except Exception as e:
+        print(f"⚠️ [CRYPTO] Error precio {symbol}: {e}")
+        return None
+
+def get_volatilidad_crypto(symbol):
+    """Volatilidad diaria desde Binance (gratuito, sin API key)"""
+    pairs = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
+    pair = pairs.get(symbol)
+    if not pair:
+        return 0.03  # fallback 3% diario
+    try:
+        url = f"https://api.binance.com/api/v3/klines?symbol={pair}&interval=1d&limit=14"
+        r = requests.get(url, timeout=10)
+        candles = r.json()
+        retornos = []
+        for i in range(1, len(candles)):
+            c_prev = float(candles[i-1][4])
+            c_curr = float(candles[i][4])
+            if c_prev > 0:
+                retornos.append(math.log(c_curr / c_prev))
+        if not retornos:
+            return 0.03
+        media = sum(retornos) / len(retornos)
+        varianza = sum((r - media) ** 2 for r in retornos) / len(retornos)
+        return math.sqrt(varianza)
+    except Exception as e:
+        print(f"⚠️ [CRYPTO] Error volatilidad {symbol}: {e}")
+        return 0.03
+
+def prob_superar_precio(precio_actual, precio_objetivo, volatilidad_diaria, dias=1):
+    """
+    Probabilidad de que el precio supere precio_objetivo en `dias` días.
+    Usa distribución log-normal.
+    """
+    if precio_actual <= 0 or precio_objetivo <= 0:
+        return None
+    sigma = volatilidad_diaria * math.sqrt(dias)
+    mu = -0.5 * sigma ** 2  # drift neutro al riesgo
+    d = (math.log(precio_objetivo / precio_actual) - mu) / sigma
+    return 1 - norm_cdf(d)
+
+def parsear_mercado_crypto(mercado):
+    """
+    Intenta extraer símbolo y precio objetivo de la pregunta del mercado.
+    Ej: "Will BTC close above $85,000 this week?"
+    """
+    pregunta = mercado.get("question", "")
+    pregunta_lower = pregunta.lower()
+
+    symbol = None
+    for s in ["BTC", "ETH", "SOL"]:
+        if s.lower() in pregunta_lower or s in pregunta:
+            symbol = s
+            break
+    if not symbol:
+        return None, None
+
+    # Extraer número del precio objetivo
+    import re
+    numeros = re.findall(r'[\$]?([\d,]+(?:\.\d+)?)[kK]?', pregunta)
+    precio_objetivo = None
+    for n in numeros:
+        try:
+            val = float(n.replace(",", ""))
+            # Filtrar valores razonables según símbolo
+            if symbol == "BTC" and 10000 < val < 500000:
+                precio_objetivo = val
+                break
+            elif symbol == "ETH" and 500 < val < 50000:
+                precio_objetivo = val
+                break
+            elif symbol == "SOL" and 10 < val < 5000:
+                precio_objetivo = val
+                break
+        except:
+            continue
+
+    return symbol, precio_objetivo
+
+mercados_crypto_apostados = set()
+
+def motor_crypto():
+    print("₿ [CRYPTO] Motor crypto iniciado")
+    while True:
+        try:
+            mercados = get_mercados_polymarket(["bitcoin", "BTC", "ethereum", "ETH"])
+            print(f"₿ [CRYPTO] {len(mercados)} mercados encontrados")
+
+            for mercado in mercados:
+                market_id = mercado.get("conditionId") or mercado.get("id")
+                if not market_id or market_id in mercados_crypto_apostados:
+                    continue
+
+                pregunta = mercado.get("question", "")
+                pregunta_lower = pregunta.lower()
+
+                # Solo mercados tipo "above/below/close above"
+                if not any(w in pregunta_lower for w in ["above", "below", "exceed", "surpass", "reach"]):
+                    continue
+
+                symbol, precio_objetivo = parsear_mercado_crypto(mercado)
+                if not symbol or not precio_objetivo:
+                    continue
+
+                precio_actual = get_precio_crypto(symbol)
+                if not precio_actual:
+                    continue
+
+                volatilidad = get_volatilidad_crypto(symbol)
+                precio_yes = get_precio_yes(mercado)
+                if not precio_yes or precio_yes <= 0:
+                    continue
+
+                # Calcular probabilidad real
+                es_above = any(w in pregunta_lower for w in ["above", "exceed", "surpass", "reach"])
+                prob_real = prob_superar_precio(precio_actual, precio_objetivo, volatilidad)
+                if prob_real is None:
+                    continue
+
+                if not es_above:
+                    prob_real = 1 - prob_real  # invertir para "below"
+
+                edge = prob_real - precio_yes
+                print(f"📊 [CRYPTO] {symbol} ${precio_actual:,.0f} → ${precio_objetivo:,.0f} | Mercado: {precio_yes:.2f} | Real: {prob_real:.2f} | Edge: {edge:.2f}")
+
+                if abs(edge) >= EDGE_THRESHOLD:
+                    side = "yes" if edge > 0 else "no"
+                    print(f"🎯 [CRYPTO] Edge! {side.upper()} | {pregunta[:60]}")
+                    ok = ejecutar_trade(
+                        market_id=market_id,
+                        side=side,
+                        razon=f"Bot crypto {symbol} | Edge: {edge:.2f}",
+                        precio_ref=f"{precio_actual} → {precio_objetivo}"
+                    )
+                    if ok:
+                        mercados_crypto_apostados.add(market_id)
+
+                time.sleep(2)
+
+            # Revisar cada 15 minutos
+            time.sleep(900)
+
+        except Exception as e:
+            print(f"❌ [CRYPTO] Error general: {e}")
+            time.sleep(60)
+
+# ============================================================
 # MAIN
 # ============================================================
-print("🤖 Bot iniciado con 2 motores en paralelo")
+print("🤖 Bot iniciado con 3 motores en paralelo")
 print(f"👀 Copy trading: {len(TRADERS)} traders | Rango precio: {COPY_MIN_PRICE}-{COPY_MAX_PRICE}")
 print(f"🌦️ Bot climático: Open-Meteo | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
+print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
 print(f"💰 Stake fijo: ${STAKE}")
-notify(f"🤖 Bot iniciado!\n💰 Stake: ${STAKE}\n👀 Copiando {len(TRADERS)} traders\n🌦️ Bot climático activo")
+notify(
+    f"🤖 Bot iniciado con 3 motores!\n"
+    f"💰 Stake: ${STAKE}\n"
+    f"👀 Copiando {len(TRADERS)} traders\n"
+    f"🌦️ Bot climático activo\n"
+    f"₿ Bot crypto activo"
+)
 
 t1 = threading.Thread(target=motor_copy_trading, daemon=True)
 t2 = threading.Thread(target=motor_climatico, daemon=True)
+t3 = threading.Thread(target=motor_crypto, daemon=True)
 
 t1.start()
 t2.start()
+t3.start()
 
-# Mantener el proceso principal vivo
 while True:
     time.sleep(60)
