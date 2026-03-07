@@ -14,7 +14,7 @@ STAKE = float(os.environ.get("MAX_USD", "1"))
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
-EDGE_THRESHOLD = 0.05
+EDGE_THRESHOLD = 0.08
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
@@ -119,11 +119,45 @@ def motor_copy_trading():
 # MOTOR 2: BOT CLIMÁTICO
 # ============================================================
 CIUDADES = {
-    "New York":    {"lat": 40.71, "lon": -74.01},
-    "Los Angeles": {"lat": 34.05, "lon": -118.24},
-    "Miami":       {"lat": 25.77, "lon": -80.19},
-    "Chicago":     {"lat": 41.88, "lon": -87.63},
-    "London":      {"lat": 51.51, "lon": -0.13},
+    # USA
+    "New York":      {"lat": 40.71,  "lon": -74.01},
+    "Los Angeles":   {"lat": 34.05,  "lon": -118.24},
+    "Miami":         {"lat": 25.77,  "lon": -80.19},
+    "Chicago":       {"lat": 41.88,  "lon": -87.63},
+    "Houston":       {"lat": 29.76,  "lon": -95.37},
+    "Phoenix":       {"lat": 33.45,  "lon": -112.07},
+    "Seattle":       {"lat": 47.61,  "lon": -122.33},
+    # Europa
+    "London":        {"lat": 51.51,  "lon": -0.13},
+    "Paris":         {"lat": 48.85,  "lon": 2.35},
+    "Berlin":        {"lat": 52.52,  "lon": 13.40},
+    "Madrid":        {"lat": 40.42,  "lon": -3.70},
+    "Rome":          {"lat": 41.90,  "lon": 12.50},
+    "Amsterdam":     {"lat": 52.37,  "lon": 4.90},
+    "Vienna":        {"lat": 48.21,  "lon": 16.37},
+    # Asia
+    "Tokyo":         {"lat": 35.69,  "lon": 139.69},
+    "Beijing":       {"lat": 39.90,  "lon": 116.41},
+    "Shanghai":      {"lat": 31.23,  "lon": 121.47},
+    "Mumbai":        {"lat": 19.08,  "lon": 72.88},
+    "Delhi":         {"lat": 28.61,  "lon": 77.21},
+    "Seoul":         {"lat": 37.57,  "lon": 126.98},
+    "Singapore":     {"lat": 1.35,   "lon": 103.82},
+    "Bangkok":       {"lat": 13.75,  "lon": 100.52},
+    "Dubai":         {"lat": 25.20,  "lon": 55.27},
+    # América Latina
+    "Buenos Aires":  {"lat": -34.60, "lon": -58.38},
+    "Sao Paulo":     {"lat": -23.55, "lon": -46.63},
+    "Mexico City":   {"lat": 19.43,  "lon": -99.13},
+    "Bogota":        {"lat": 4.71,   "lon": -74.07},
+    "Lima":          {"lat": -12.05, "lon": -77.04},
+    "Santiago":      {"lat": -33.46, "lon": -70.65},
+    # Oceanía / África
+    "Sydney":        {"lat": -33.87, "lon": 151.21},
+    "Melbourne":     {"lat": -37.81, "lon": 144.96},
+    "Lagos":         {"lat": 6.45,   "lon": 3.40},
+    "Cairo":         {"lat": 30.06,  "lon": 31.25},
+    "Nairobi":       {"lat": -1.29,  "lon": 36.82},
 }
 
 def get_precipitacion_prob(ciudad):
