@@ -14,6 +14,8 @@ TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
 EDGE_THRESHOLD = float(os.environ.get("EDGE_THRESHOLD", "0.05"))
 EDGE_THRESHOLD_CRYPTO = float(os.environ.get("EDGE_THRESHOLD_CRYPTO", "0.10"))  # más alto para crypto
+EDGE_THRESHOLD_SPORTS = float(os.environ.get("EDGE_THRESHOLD_SPORTS", "0.07"))  # 7% para deportes
+ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
