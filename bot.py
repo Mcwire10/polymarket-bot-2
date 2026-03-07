@@ -36,31 +36,33 @@ client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 trade_lock = threading.Lock()
 trades_copiados = set()
 
-def importar_mercado(condition_id):
-    """Importa un mercado de Polymarket a Simmer si no existe todavía"""
-    try:
-        url = f"https://polymarket.com/event/{condition_id}"
-        result = client.import_market(url)
-        simmer_id = result.get("id") if isinstance(result, dict) else None
-        if simmer_id:
-            print(f"✅ Mercado importado a Simmer: {simmer_id}")
-            return simmer_id
-    except Exception as e:
-        print(f"⚠️ Error importando mercado: {e}")
-    # Intentar con slug directo
-    try:
-        result = client.import_market(f"https://polymarket.com/market/{condition_id}")
-        simmer_id = result.get("id") if isinstance(result, dict) else None
-        return simmer_id
-    except:
-        pass
+def importar_mercado(condition_id, slug=None):
+    """Importa un mercado de Polymarket a Simmer"""
+    urls_a_probar = []
+    if slug:
+        urls_a_probar.append(f"https://polymarket.com/event/{slug}")
+        urls_a_probar.append(f"https://polymarket.com/market/{slug}")
+    urls_a_probar.append(f"https://polymarket.com/event/{condition_id}")
+
+    for url in urls_a_probar:
+        try:
+            print(f"🔄 Importando: {url}")
+            result = client.import_market(url)
+            print(f"📥 Respuesta import: {result}")
+            if isinstance(result, dict):
+                simmer_id = result.get("id") or result.get("market_id") or result.get("conditionId")
+                if simmer_id:
+                    print(f"✅ Mercado importado: {simmer_id}")
+                    return simmer_id
+        except Exception as e:
+            print(f"⚠️ Error importando {url}: {e}")
     return None
 
 def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
     with trade_lock:
         try:
-            # Intentar importar el mercado a Simmer primero
-            simmer_id = importar_mercado(market_id)
+            # Importar mercado a Simmer y obtener su ID
+            simmer_id = importar_mercado(market_id, slug=slug)
             trade_id = simmer_id or market_id
 
             result = client.trade(
