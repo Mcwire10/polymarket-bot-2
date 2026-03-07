@@ -29,6 +29,15 @@ def notify(msg):
     except Exception as e:
         print(f"⚠️ Telegram error: {e}")
 
+# === PROXY ===
+PROXY_URL = os.environ.get("PROXY_URL")
+if PROXY_URL:
+    os.environ["HTTP_PROXY"] = PROXY_URL
+    os.environ["HTTPS_PROXY"] = PROXY_URL
+    print(f"🌐 Proxy configurado: {PROXY_URL[:30]}...")
+else:
+    print("⚠️ Sin proxy configurado")
+
 # === SIMMER CLIENT ===
 client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 
