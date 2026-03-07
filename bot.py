@@ -330,7 +330,7 @@ def motor_climatico():
             mercados = get_mercados_polymarket(["weather", "temperature", "hurricane", "tornado", "flood", "snowfall"])
             print(f"🌦️ [CLIMA] {len(mercados)} mercados encontrados")
             for m in mercados[:5]:
-                print(f"🌦️ [CLIMA] Mercado: {m.get('question', '')[:80]} | keys: {list(m.keys())[:8]}")
+                print(f"🌦️ [CLIMA] Mercado: {m.get('question', '')[:80]}")
             for mercado in mercados:
                 market_id = mercado.get("conditionId") or mercado.get("id")
                 if not market_id or market_id in mercados_clima_apostados:
