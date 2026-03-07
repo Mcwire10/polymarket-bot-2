@@ -180,17 +180,21 @@ def get_precipitacion_prob(ciudad):
         return None
 
 def get_mercados_polymarket(keywords):
+    """Busca mercados filtrando por pregunta localmente — más confiable que el search de Polymarket"""
     mercados = []
-    for keyword in keywords:
-        try:
-            url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=20&search={keyword}"
-            r = requests.get(url, timeout=10)
-            data = r.json()
-            if isinstance(data, list):
-                mercados.extend(data)
-            time.sleep(1)
-        except Exception as e:
-            print(f"⚠️ Error buscando mercados '{keyword}': {e}")
+    try:
+        # Traer mercados activos ordenados por volumen
+        url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume&ascending=false"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if isinstance(data, list):
+            # Filtrar localmente por keywords en la pregunta
+            for m in data:
+                pregunta = m.get("question", "").lower()
+                if any(kw.lower() in pregunta for kw in keywords):
+                    mercados.append(m)
+    except Exception as e:
+        print(f"⚠️ Error obteniendo mercados: {e}")
     return mercados
 
 def get_precio_yes(mercado):
