@@ -526,28 +526,203 @@ def motor_crypto():
             time.sleep(60)
 
 # ============================================================
+# MOTOR 4: BOT DEPORTES (The Odds API + Polymarket)
+# ============================================================
+
+# Deportes a monitorear
+DEPORTES = [
+    "soccer_epl",           # Premier League
+    "soccer_uefa_champs_league",  # Champions League
+    "soccer_argentina_primera_division",  # Liga Argentina
+    "basketball_nba",       # NBA
+    "americanfootball_nfl", # NFL
+    "baseball_mlb",         # MLB
+]
+
+def get_odds_deportes():
+    """Obtiene probabilidades de casas de apuestas desde The Odds API"""
+    if not ODDS_API_KEY:
+        return []
+    partidos = []
+    for deporte in DEPORTES:
+        try:
+            url = (
+                f"https://api.the-odds-api.com/v4/sports/{deporte}/odds"
+                f"?apiKey={ODDS_API_KEY}&regions=eu&markets=h2h&oddsFormat=decimal&dateFormat=iso"
+            )
+            r = requests.get(url, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                for partido in data:
+                    partido["_sport"] = deporte
+                partidos.extend(data)
+            elif r.status_code == 401:
+                print(f"⚠️ [DEPORTES] API key inválida")
+                break
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"⚠️ [DEPORTES] Error obteniendo odds de {deporte}: {e}")
+    return partidos
+
+def decimal_a_prob(odd):
+    """Convierte odds decimales a probabilidad implícita"""
+    if odd <= 0:
+        return 0
+    return 1 / odd
+
+def get_prob_casa_apuestas(partido):
+    """
+    Calcula probabilidad promedio entre todas las casas para home/away/draw.
+    Retorna {home_prob, away_prob, draw_prob} sin vig.
+    """
+    bookmakers = partido.get("bookmakers", [])
+    if not bookmakers:
+        return None
+
+    home_probs, away_probs, draw_probs = [], [], []
+
+    for bm in bookmakers:
+        for market in bm.get("markets", []):
+            if market.get("key") != "h2h":
+                continue
+            outcomes = market.get("outcomes", [])
+            home_name = partido.get("home_team", "")
+            away_name = partido.get("away_team", "")
+            for outcome in outcomes:
+                p = decimal_a_prob(outcome.get("price", 0))
+                if outcome.get("name") == home_name:
+                    home_probs.append(p)
+                elif outcome.get("name") == away_name:
+                    away_probs.append(p)
+                else:
+                    draw_probs.append(p)
+
+    if not home_probs or not away_probs:
+        return None
+
+    # Promedio y normalización (remover vig)
+    home_raw = sum(home_probs) / len(home_probs)
+    away_raw = sum(away_probs) / len(away_probs)
+    draw_raw = sum(draw_probs) / len(draw_probs) if draw_probs else 0
+    total = home_raw + away_raw + draw_raw or 1
+
+    return {
+        "home": home_raw / total,
+        "away": away_raw / total,
+        "draw": draw_raw / total if draw_probs else 0,
+    }
+
+def buscar_mercado_partido_polymarket(home, away):
+    """Busca en Polymarket el mercado del partido usando nombres de equipos"""
+    keywords = home.split()[0]  # primera palabra del equipo local
+    try:
+        url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=50&order=volume&ascending=false"
+        r = requests.get(url, timeout=10)
+        mercados = r.json() if isinstance(r.json(), list) else []
+        home_lower = home.lower()
+        away_lower = away.lower()
+        for m in mercados:
+            pregunta = m.get("question", "").lower()
+            # Buscar mercados que mencionen ambos equipos
+            if any(w in pregunta for w in home_lower.split()[:2]) and                any(w in pregunta for w in away_lower.split()[:2]):
+                return m
+    except Exception as e:
+        print(f"⚠️ [DEPORTES] Error buscando mercado: {e}")
+    return None
+
+mercados_deportes_apostados = set()
+
+def motor_deportes():
+    print("⚽ [DEPORTES] Motor de deportes iniciado")
+    while True:
+        try:
+            if not ODDS_API_KEY:
+                print("⚠️ [DEPORTES] Sin ODDS_API_KEY, motor pausado")
+                time.sleep(3600)
+                continue
+
+            partidos = get_odds_deportes()
+            print(f"⚽ [DEPORTES] {len(partidos)} partidos encontrados")
+
+            for partido in partidos:
+                home = partido.get("home_team", "")
+                away = partido.get("away_team", "")
+                partido_id = partido.get("id", "")
+
+                if partido_id in mercados_deportes_apostados:
+                    continue
+
+                probs = get_prob_casa_apuestas(partido)
+                if not probs:
+                    continue
+
+                # Buscar mercado en Polymarket
+                mercado = buscar_mercado_partido_polymarket(home, away)
+                if not mercado:
+                    continue
+
+                precio_yes = get_precio_yes(mercado)
+                if not precio_yes or precio_yes <= 0:
+                    continue
+
+                market_id = mercado.get("conditionId") or mercado.get("id")
+                pregunta = mercado.get("question", "")
+
+                # Comparar probabilidad de casa (home win = YES en la mayoría de mercados)
+                prob_real = probs["home"]
+                edge = prob_real - precio_yes
+
+                print(f"⚽ [DEPORTES] {home} vs {away} | Casas: {prob_real:.2f} | Poly: {precio_yes:.2f} | Edge: {edge:.2f}")
+
+                if abs(edge) >= EDGE_THRESHOLD_SPORTS:
+                    side = "yes" if edge > 0 else "no"
+                    print(f"🎯 [DEPORTES] Edge! {side.upper()} | {pregunta[:60]}")
+                    ok = ejecutar_trade(
+                        market_id=market_id,
+                        side=side,
+                        razon=f"Bot deportes {home} vs {away} | Edge: {edge:.2f}",
+                        precio_ref=precio_yes if side == "yes" else (1 - precio_yes),
+                        slug=mercado.get("slug")
+                    )
+                    if ok:
+                        mercados_deportes_apostados.add(partido_id)
+
+                time.sleep(1)
+
+            # Revisar cada 20 minutos
+            time.sleep(1200)
+
+        except Exception as e:
+            print(f"❌ [DEPORTES] Error general: {e}")
+            time.sleep(60)
+
+# ============================================================
 # MAIN
 # ============================================================
-print("🤖 Bot iniciado con 3 motores en paralelo")
+print("🤖 Bot iniciado con 4 motores en paralelo")
 print(f"👀 Copy trading: {len(TRADERS)} traders | Rango precio: {COPY_MIN_PRICE}-{COPY_MAX_PRICE}")
 print(f"🌦️ Bot climático: Open-Meteo | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
 print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD_CRYPTO*100:.0f}%")
+print(f"⚽ Bot deportes: The Odds API | Edge mínimo: {EDGE_THRESHOLD_SPORTS*100:.0f}%")
 print(f"💰 Stake fijo: ${STAKE}")
 notify(
-    f"🤖 Bot iniciado con 3 motores!\n"
+    f"🤖 Bot iniciado con 4 motores!\n"
     f"💰 Stake: ${STAKE}\n"
     f"👀 Copiando {len(TRADERS)} traders\n"
     f"🌦️ Bot climático activo\n"
-    f"₿ Bot crypto activo"
+    f"₿ Bot crypto activo\n"
+    f"⚽ Bot deportes activo"
 )
 
 t1 = threading.Thread(target=motor_copy_trading, daemon=True)
 t2 = threading.Thread(target=motor_climatico, daemon=True)
 t3 = threading.Thread(target=motor_crypto, daemon=True)
+t4 = threading.Thread(target=motor_deportes, daemon=True)
 
 t1.start()
 t2.start()
 t3.start()
+t4.start()
 
 while True:
     time.sleep(60)
