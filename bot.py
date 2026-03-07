@@ -217,6 +217,11 @@ def analizar_mercado_clima(mercado):
     if not ciudad_detectada:
         return None
 
+    # Verificar que la pregunta sea realmente sobre clima
+    palabras_clima = ["rain", "rainfall", "precipitation", "storm", "snow", "flood", "temperature", "weather", "hurricane", "tornado", "degrees", "celsius", "fahrenheit", "humid", "wind"]
+    if not any(w in pregunta for w in palabras_clima):
+        return None
+
     prob_real = get_precipitacion_prob(ciudad_detectada)
     if prob_real is None:
         return None
@@ -238,7 +243,7 @@ def motor_climatico():
     print("🌦️ [CLIMA] Motor climático iniciado")
     while True:
         try:
-            mercados = get_mercados_polymarket(["rain", "rainfall", "storm"])
+            mercados = get_mercados_polymarket(["weather", "temperature", "hurricane", "tornado", "flood", "snowfall"])
             print(f"🌦️ [CLIMA] {len(mercados)} mercados encontrados")
             for m in mercados[:5]:
                 print(f"🌦️ [CLIMA] Mercado: {m.get('question', '')[:80]}")
