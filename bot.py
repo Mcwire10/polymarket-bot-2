@@ -26,7 +26,11 @@ def notify(msg):
 
 # === SIMMER CLIENT ===
 # Simmer maneja el geoblock internamente — no necesitamos proxy
-os.environ["SIMMER_PRIVATE_KEY"] = WALLET_PRIVATE_KEY or ""
+# El SDK espera la key sin 0x
+key = WALLET_PRIVATE_KEY or ""
+if key.startswith("0x"):
+    key = key[2:]
+os.environ["SIMMER_PRIVATE_KEY"] = key
 
 client = SimmerClient(
     api_key=SIMMER_API_KEY,
