@@ -49,6 +49,40 @@ try:
 except Exception as e:
     print(f"⚠️ Error en approvals: {e}")
 
+# === DIAGNOSTICO SIMMER ===
+try:
+    import json
+    print("\n========== SIMMER DIAGNOSTIC ==========")
+    
+    # 1. Agent info
+    agent = client.get_agent() if hasattr(client, 'get_agent') else None
+    print(f"1. AGENT: {agent}")
+    
+    # 2. Wallet type
+    has_key = bool(os.environ.get("WALLET_PRIVATE_KEY"))
+    print(f"2. WALLET TYPE: {'external' if has_key else 'managed'}")
+    
+    # 3. Health check
+    r = requests.get("https://api.simmer.markets/api/sdk/health", timeout=10)
+    print(f"3. HEALTH CHECK: status={r.status_code} time={r.elapsed.total_seconds():.2f}s response={r.text[:200]}")
+    
+    # 4. Agent status
+    headers = {"Authorization": f"Bearer {SIMMER_API_KEY}"}
+    r = requests.get("https://api.simmer.markets/api/sdk/agent", headers=headers, timeout=10)
+    print(f"4. AGENT STATUS: {r.text[:300]}")
+    
+    # 5. Recent failed orders
+    r = requests.get("https://api.simmer.markets/api/sdk/orders?status=failed&limit=3", headers=headers, timeout=10)
+    print(f"5. RECENT ERRORS: {r.text[:500]}")
+    
+    print("6. CURRENT ISSUE: ORDER_REJECTED not enough balance/allowance on polymarket venue. 9/9 approvals set, $7.90 balance available.")
+    
+    import datetime
+    print(f"7. TIMESTAMP: {datetime.datetime.utcnow().isoformat()}Z")
+    print("========================================\n")
+except Exception as e:
+    print(f"⚠️ Error en diagnóstico: {e}")
+
 # === LOCK para evitar trades simultáneos ===
 trade_lock = threading.Lock()
 trades_copiados = set()
