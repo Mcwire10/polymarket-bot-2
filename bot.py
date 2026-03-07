@@ -14,7 +14,7 @@ STAKE = float(os.environ.get("MAX_USD", "1"))
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
-EDGE_THRESHOLD = 0.08
+EDGE_THRESHOLD = 0.05
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
