@@ -252,7 +252,7 @@ def motor_climatico():
             for m in mercados[:5]:
                 print(f"🌦️ [CLIMA] Mercado: {m.get('question', '')[:80]}")
             for mercado in mercados:
-                market_id = mercado.get("conditionId") or mercado.get("id")
+                market_id = mercado.get("id") or mercado.get("conditionId")
                 if not market_id or market_id in mercados_clima_apostados:
                     continue
                 resultado = analizar_mercado_clima(mercado)
@@ -384,7 +384,7 @@ def motor_crypto():
             print(f"₿ [CRYPTO] {len(mercados)} mercados encontrados")
 
             for mercado in mercados:
-                market_id = mercado.get("conditionId") or mercado.get("id")
+                market_id = mercado.get("id") or mercado.get("conditionId")
                 if not market_id or market_id in mercados_crypto_apostados:
                     continue
 
