@@ -36,11 +36,35 @@ client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 trade_lock = threading.Lock()
 trades_copiados = set()
 
-def ejecutar_trade(market_id, side, razon, precio_ref=None):
+def importar_mercado(condition_id):
+    """Importa un mercado de Polymarket a Simmer si no existe todavía"""
+    try:
+        url = f"https://polymarket.com/event/{condition_id}"
+        result = client.import_market(url)
+        simmer_id = result.get("id") if isinstance(result, dict) else None
+        if simmer_id:
+            print(f"✅ Mercado importado a Simmer: {simmer_id}")
+            return simmer_id
+    except Exception as e:
+        print(f"⚠️ Error importando mercado: {e}")
+    # Intentar con slug directo
+    try:
+        result = client.import_market(f"https://polymarket.com/market/{condition_id}")
+        simmer_id = result.get("id") if isinstance(result, dict) else None
+        return simmer_id
+    except:
+        pass
+    return None
+
+def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
     with trade_lock:
         try:
+            # Intentar importar el mercado a Simmer primero
+            simmer_id = importar_mercado(market_id)
+            trade_id = simmer_id or market_id
+
             result = client.trade(
-                market_id=market_id,
+                market_id=trade_id,
                 side=side,
                 amount=STAKE
             )
@@ -264,7 +288,8 @@ def motor_climatico():
                         market_id=market_id,
                         side=side,
                         razon=f"Bot climático | Edge: {edge:.2f}",
-                        precio_ref=edge
+                        precio_ref=edge,
+                        slug=mercado.get("slug")
                     )
                     if ok:
                         mercados_clima_apostados.add(market_id)
