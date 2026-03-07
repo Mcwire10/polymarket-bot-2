@@ -100,18 +100,18 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             simmer_id = importar_mercado(market_id, slug=slug)
             trade_id = simmer_id or market_id
 
-            trades_abiertos += 1
             # Garantizar mínimo 5 shares para Polymarket
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
-            monto_minimo_shares = round(5 * precio_impl + 0.50, 2)  # 5 shares + margen
-            limite_riesgo = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO, 2)
+            monto_minimo_shares = round(5 * precio_impl + 0.10, 2)  # 5 shares + margen chico
+            monto_final = max(STAKE, monto_minimo_shares)
 
-            if monto_minimo_shares > limite_riesgo:
-                trades_abiertos -= 1  # revertir contador
-                print(f"⏭️ Skip: necesita ${monto_minimo_shares} pero límite es ${limite_riesgo}")
+            # Verificar que el monto final no exceda el presupuesto disponible
+            presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
+            if monto_final > presupuesto_disponible:
+                print(f"⏭️ Skip: necesita ${monto_final} pero presupuesto disponible es ${presupuesto_disponible}")
                 return False
 
-            monto_final = max(STAKE, monto_minimo_shares)
+            trades_abiertos += 1
             print(f"💵 Monto trade: ${monto_final} (precio: {precio_impl:.2f}, mín shares OK)")
             result = client.trade(
                 market_id=trade_id,
@@ -546,6 +546,7 @@ def get_odds_deportes():
     if not ODDS_API_KEY:
         return []
     partidos = []
+    deportes_validos = set(DEPORTES)  # solo ligas configuradas
     for deporte in DEPORTES:
         try:
             url = (
@@ -557,7 +558,7 @@ def get_odds_deportes():
                 data = r.json()
                 for partido in data:
                     partido["_sport"] = deporte
-                partidos.extend(data)
+                    partidos.append(partido)
             elif r.status_code == 401:
                 print(f"⚠️ [DEPORTES] API key inválida")
                 break
@@ -615,19 +616,26 @@ def get_prob_casa_apuestas(partido):
     }
 
 def buscar_mercado_partido_polymarket(home, away):
-    """Busca en Polymarket el mercado del partido usando nombres de equipos"""
-    keywords = home.split()[0]  # primera palabra del equipo local
+    """Busca en Polymarket el mercado ganador del partido usando nombres de equipos"""
     try:
-        url = f"https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=50&order=volume&ascending=false"
+        url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume&ascending=false"
         r = requests.get(url, timeout=10)
         mercados = r.json() if isinstance(r.json(), list) else []
-        home_lower = home.lower()
-        away_lower = away.lower()
+        home_words = home.lower().split()[:2]
+        away_words = away.lower().split()[:2]
+        # Palabras que indican mercado de apuestas de sets/games (excluir)
+        excluir_keywords = ["o/u", "over", "under", "set ", "game", "handicap", "spread", "total", "quarter", "half"]
+        candidatos = []
         for m in mercados:
             pregunta = m.get("question", "").lower()
-            # Buscar mercados que mencionen ambos equipos
-            if any(w in pregunta for w in home_lower.split()[:2]) and                any(w in pregunta for w in away_lower.split()[:2]):
-                return m
+            if any(w in pregunta for w in home_words) and any(w in pregunta for w in away_words):
+                # Preferir mercados de ganador directo (sin sets/totales)
+                tiene_excluido = any(ex in pregunta for ex in excluir_keywords)
+                candidatos.append((m, tiene_excluido))
+        # Primero los que NO tienen keywords de excluir
+        candidatos.sort(key=lambda x: x[1])
+        if candidatos:
+            return candidatos[0][0]
     except Exception as e:
         print(f"⚠️ [DEPORTES] Error buscando mercado: {e}")
     return None
