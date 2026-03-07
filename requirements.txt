@@ -1,3 +1,4 @@
 requests
 simmer-sdk
 eth-account
+py-clob-client
