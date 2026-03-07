@@ -32,6 +32,14 @@ def notify(msg):
 # === SIMMER CLIENT ===
 client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 
+# === APPROVALS (una sola vez al iniciar) ===
+try:
+    print("🔓 Configurando approvals de Polymarket...")
+    client.set_approvals()
+    print("✅ Approvals configurados")
+except Exception as e:
+    print(f"⚠️ Error en approvals: {e}")
+
 # === LOCK para evitar trades simultáneos ===
 trade_lock = threading.Lock()
 trades_copiados = set()
