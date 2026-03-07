@@ -21,7 +21,7 @@ COPY_MAX_PRICE = 0.75
 
 # === GESTIÓN DE RIESGO ===
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
-MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
+MAX_TRADES_ABIERTOS = 1                                 # máximo 1 posición a la vez
 MAX_PORCENTAJE_SALDO = 0.30                             # no más del 30% del saldo total
 SALDO_INICIAL = 7.82                                    # saldo actual en USDC.e
 
