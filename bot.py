@@ -100,11 +100,11 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
 
             trades_abiertos += 1
             # Garantizar mínimo 5 shares para Polymarket
-            # precio implícito del side
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
-            monto_minimo = max(STAKE, round(5 * precio_impl + 0.10, 2))
-            monto_final = min(monto_minimo, SALDO_INICIAL * MAX_PORCENTAJE_SALDO)
-            print(f"💵 Monto trade: ${monto_final} (mínimo shares: 5)")
+            monto_minimo_shares = round(5 * precio_impl + 0.50, 2)  # 5 shares + margen
+            monto_final = max(STAKE, monto_minimo_shares)
+            monto_final = min(monto_final, SALDO_INICIAL * MAX_PORCENTAJE_SALDO)
+            print(f"💵 Monto trade: ${monto_final} (precio: {precio_impl:.2f}, mín shares OK)")
             result = client.trade(
                 market_id=trade_id,
                 side=side,
@@ -334,11 +334,13 @@ def motor_climatico():
                     side, edge = resultado
                     pregunta = mercado.get("question", "")[:60]
                     print(f"🎯 [CLIMA] Edge! {side.upper()} | Edge: {edge:.2f} | {pregunta}")
+                    precio_yes = get_precio_yes(mercado)
+                    precio_side = precio_yes if side == "yes" else (1 - precio_yes)
                     ok = ejecutar_trade(
                         market_id=market_id,
                         side=side,
                         razon=f"Bot climático | Edge: {edge:.2f}",
-                        precio_ref=edge,
+                        precio_ref=precio_side,
                         slug=mercado.get("slug")
                     )
                     if ok:
@@ -498,11 +500,12 @@ def motor_crypto():
                 if abs(edge) >= EDGE_THRESHOLD_CRYPTO:
                     side = "yes" if edge > 0 else "no"
                     print(f"🎯 [CRYPTO] Edge! {side.upper()} | {pregunta[:60]}")
+                    precio_side = precio_yes if side == "yes" else (1 - precio_yes)
                     ok = ejecutar_trade(
                         market_id=market_id,
                         side=side,
                         razon=f"Bot crypto {symbol} | Edge: {edge:.2f}",
-                        precio_ref=f"{precio_actual} → {precio_objetivo}"
+                        precio_ref=precio_side
                     )
                     if ok:
                         mercados_crypto_apostados.add(market_id)
