@@ -9,14 +9,19 @@ from simmer_sdk import SimmerClient
 SIMMER_API_KEY = os.environ.get("SIMMER_API_KEY")
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-STAKE = float(os.environ.get("MAX_USD", "1"))
-
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
 EDGE_THRESHOLD = float(os.environ.get("EDGE_THRESHOLD", "0.05"))
+EDGE_THRESHOLD_CRYPTO = float(os.environ.get("EDGE_THRESHOLD_CRYPTO", "0.10"))  # más alto para crypto
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
+
+# === GESTIÓN DE RIESGO ===
+STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
+MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
+MAX_PORCENTAJE_SALDO = 0.30                             # no más del 30% del saldo total
+SALDO_INICIAL = 7.82                                    # saldo actual en USDC.e
 
 # === TELEGRAM ===
 def notify(msg):
@@ -109,29 +114,49 @@ def importar_mercado(condition_id, slug=None):
             print(f"⚠️ Error importando {url}: {e}")
     return None
 
+trades_abiertos = 0
+
 def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
+    global trades_abiertos
     with trade_lock:
+        # === CHEQUEO DE RIESGO ===
+        if trades_abiertos >= MAX_TRADES_ABIERTOS:
+            print(f"⛔ Riesgo: máximo {MAX_TRADES_ABIERTOS} trades abiertos alcanzado, skip")
+            return False
+        gasto_actual = trades_abiertos * STAKE
+        if (gasto_actual + STAKE) > (SALDO_INICIAL * MAX_PORCENTAJE_SALDO):
+            print(f"⛔ Riesgo: límite del {MAX_PORCENTAJE_SALDO*100:.0f}% del saldo alcanzado, skip")
+            return False
         try:
             # Importar mercado a Simmer y obtener su ID
             simmer_id = importar_mercado(market_id, slug=slug)
             trade_id = simmer_id or market_id
 
+            trades_abiertos += 1
             result = client.trade(
                 market_id=trade_id,
                 side=side,
                 amount=STAKE
             )
-            msg = (
-                f"✅ Trade ejecutado!\n"
-                f"Razón: {razon}\n"
-                f"Side: {side.upper()}\n"
-                f"Precio ref: {precio_ref}\n"
-                f"Stake: ${STAKE}\n"
-                f"Resultado: {result}"
-            )
-            print(msg)
-            notify(msg)
-            return True
+            if hasattr(result, 'success') and result.success:
+                msg = (
+                    f"✅ Trade ejecutado!\n"
+                    f"Razón: {razon}\n"
+                    f"Side: {side.upper()}\n"
+                    f"Precio ref: {precio_ref}\n"
+                    f"Stake: ${STAKE}\n"
+                    f"Trades abiertos: {trades_abiertos}/{MAX_TRADES_ABIERTOS}\n"
+                    f"Resultado: {result}"
+                )
+                print(msg)
+                notify(msg)
+                return True
+            else:
+                trades_abiertos -= 1  # revertir si falló
+                err = f"❌ Trade fallido: {getattr(result, 'error', result)}"
+                print(err)
+                notify(err)
+                return False
         except Exception as e:
             err = f"❌ Error ejecutando trade: {e}\nMercado: {str(market_id)[:40]}..."
             print(err)
@@ -498,7 +523,7 @@ def motor_crypto():
                 edge = prob_real - precio_yes
                 print(f"📊 [CRYPTO] {symbol} ${precio_actual:,.0f} → ${precio_objetivo:,.0f} | Mercado: {precio_yes:.2f} | Real: {prob_real:.2f} | Edge: {edge:.2f}")
 
-                if abs(edge) >= EDGE_THRESHOLD:
+                if abs(edge) >= EDGE_THRESHOLD_CRYPTO:
                     side = "yes" if edge > 0 else "no"
                     print(f"🎯 [CRYPTO] Edge! {side.upper()} | {pregunta[:60]}")
                     ok = ejecutar_trade(
@@ -525,7 +550,7 @@ def motor_crypto():
 print("🤖 Bot iniciado con 3 motores en paralelo")
 print(f"👀 Copy trading: {len(TRADERS)} traders | Rango precio: {COPY_MIN_PRICE}-{COPY_MAX_PRICE}")
 print(f"🌦️ Bot climático: Open-Meteo | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
-print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
+print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD_CRYPTO*100:.0f}%")
 print(f"💰 Stake fijo: ${STAKE}")
 notify(
     f"🤖 Bot iniciado con 3 motores!\n"
