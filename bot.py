@@ -112,12 +112,16 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
                 return False
 
             trades_abiertos += 1
-            print(f"💵 Monto trade: ${monto_final} (precio: {precio_impl:.2f}, mín shares OK)")
-            result = client.trade(
-                market_id=trade_id,
-                side=side,
-                amount=monto_final
-            )
+            # Slippage: subir 2% el precio para cruzar el spread y asegurar fill
+            precio_con_slippage = None
+            if precio_impl and 0 < precio_impl < 1:
+                precio_con_slippage = round(min(precio_impl * 1.02, 0.95), 4)
+
+            print(f"💵 Monto trade: ${monto_final} (precio ref: {precio_impl:.2f} → con slippage: {precio_con_slippage})")
+            trade_kwargs = dict(market_id=trade_id, side=side, amount=monto_final, order_type="GTC")
+            if precio_con_slippage:
+                trade_kwargs["price"] = precio_con_slippage
+            result = client.trade(**trade_kwargs)
             if hasattr(result, 'success') and result.success:
                 msg = (
                     f"✅ Trade ejecutado!\n"
@@ -316,6 +320,11 @@ def analizar_mercado_clima(mercado):
     edge_no  = (1 - prob_real) - (1 - precio_yes)
 
     print(f"📊 [CLIMA] {ciudad_detectada} | Mercado: {precio_yes:.2f} | Open-Meteo: {prob_real:.2f} | Edge YES: {edge_yes:.2f}")
+
+    # Filtro: mercados extremos (< 0.10 o > 0.90) suelen tener razón, Open-Meteo no es suficiente
+    if precio_yes < 0.10 or precio_yes > 0.90:
+        print(f"⏭️ [CLIMA] Skip: precio extremo {precio_yes:.2f}, mercado probablemente correcto")
+        return None
 
     if edge_yes >= EDGE_THRESHOLD:
         return ("yes", edge_yes)
