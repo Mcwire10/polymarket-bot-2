@@ -14,7 +14,7 @@ STAKE = float(os.environ.get("MAX_USD", "1"))
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
-EDGE_THRESHOLD = 0.08
+EDGE_THRESHOLD = float(os.environ.get("EDGE_THRESHOLD", "0.05"))
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
@@ -240,6 +240,8 @@ def motor_climatico():
         try:
             mercados = get_mercados_polymarket(["rain", "rainfall", "storm"])
             print(f"🌦️ [CLIMA] {len(mercados)} mercados encontrados")
+            for m in mercados[:5]:
+                print(f"🌦️ [CLIMA] Mercado: {m.get('question', '')[:80]}")
             for mercado in mercados:
                 market_id = mercado.get("conditionId") or mercado.get("id")
                 if not market_id or market_id in mercados_clima_apostados:
