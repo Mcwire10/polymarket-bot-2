@@ -1264,8 +1264,8 @@ def motor_politica():
     while True:
         try:
             # Gemini recomienda no operar política con < $5 (bloquea capital semanas)
-            if saldo_wallet < 5.0:
-                print(f"⏸️ [POLITICA] Saldo ${saldo_wallet:.2f} < $5 — motor pausado hasta tener más capital")
+            if SALDO_INICIAL < 5.0:
+                print(f"⏸️ [POLITICA] Saldo ${SALDO_INICIAL:.2f} < $5 — motor pausado hasta tener más capital")
                 time.sleep(1800)
                 continue
             # === FUENTE 1: Divergencias IA de Simmer ===
