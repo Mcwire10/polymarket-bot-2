@@ -47,7 +47,7 @@ def registrar_trade(motor, mercado, side, monto, ok):
 # === GESTIÓN DE RIESGO ===
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
 MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
-MAX_PORCENTAJE_SALDO = 0.30                             # no más del 30% del saldo total
+MAX_PORCENTAJE_SALDO = 0.50                             # no más del 50% del saldo total
 SALDO_INICIAL = 5.56                                    # saldo actual en USDC.e (se actualiza al arrancar)
 
 # === TELEGRAM ===
