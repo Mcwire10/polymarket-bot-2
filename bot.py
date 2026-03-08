@@ -462,10 +462,14 @@ def analizar_mercado_clima(mercado):
     if es_temperatura:
         # Extraer temperatura objetivo de la pregunta
         import re
-        nums = re.findall(r'[-+]?\d+(?:\.\d+)?', pregunta)
+        nums = re.findall(r'\d+(?:\.\d+)?', pregunta)
         if not nums:
             return None
-        temp_objetivo = float(nums[0])
+        # Para "between 58-59", tomar el promedio
+        if "between" in pregunta and len(nums) >= 2:
+            temp_objetivo = (float(nums[0]) + float(nums[1])) / 2
+        else:
+            temp_objetivo = float(nums[0])
         # Determinar si es Celsius o Fahrenheit
         es_fahrenheit = "°f" in pregunta or "fahrenheit" in pregunta or "f on" in pregunta or "-" in pregunta and "f" in pregunta
         temp_c, temp_f = get_temperatura_max(ciudad_detectada)
