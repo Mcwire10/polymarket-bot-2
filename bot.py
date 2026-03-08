@@ -954,21 +954,61 @@ def motor_sincronizacion():
                 print(f"⚠️ [SYNC] Auto-redeem error: {e}")
             posiciones = client.get_positions()
             if posiciones is not None:
-                # Simmer devuelve lista de objetos Position (no dicts)
                 if isinstance(posiciones, list):
+                    print(f"🔄 [SYNC] {len(posiciones)} posiciones encontradas")
                     activas = []
                     for p in posiciones:
                         try:
-                            # Intentar como objeto primero, luego como dict
-                            resolved = getattr(p, "resolved", None) or (p.get("resolved", False) if isinstance(p, dict) else False)
-                            value = getattr(p, "currentValue", None) or (p.get("currentValue", 0) if isinstance(p, dict) else 0)
+                            # Debug: ver qué campos tiene el objeto
+                            if hasattr(p, '__dict__'):
+                                campos = {k: v for k, v in vars(p).items() if not k.startswith('_')}
+                            elif isinstance(p, dict):
+                                campos = p
+                            else:
+                                campos = {}
+                            print(f"🔄 [SYNC] Posición: {str(campos)[:150]}")
+
+                            # Intentar múltiples nombres de campo
+                            resolved = (getattr(p, "resolved", None) or getattr(p, "is_resolved", None) or
+                                       (p.get("resolved") or p.get("is_resolved") if isinstance(p, dict) else False))
+                            value = (getattr(p, "currentValue", None) or getattr(p, "current_value", None) or
+                                    getattr(p, "value", None) or getattr(p, "size", None) or
+                                    (p.get("currentValue") or p.get("current_value") or p.get("value") if isinstance(p, dict) else 0))
                             if not resolved and float(value or 0) > 0:
                                 activas.append(p)
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"⚠️ [SYNC] Error parseando posición: {e}")
                     nuevo_valor = min(len(activas), MAX_TRADES_ABIERTOS)
                 else:
+                    print(f"🔄 [SYNC] Posiciones no es lista: {type(posiciones)}")
                     nuevo_valor = 0
+
+                # Si SDK devuelve 0 activas, verificar con REST API directamente
+                if nuevo_valor == 0:
+                    try:
+                        headers = {"Authorization": f"Bearer {SIMMER_API_KEY}"}
+                        r = requests.get(
+                            f"https://api.simmer.market/api/sdk/positions?wallet={POLY_WALLET_ADDR}",
+                            headers=headers, timeout=10
+                        )
+                        if r.status_code == 200:
+                            data = r.json()
+                            pos_list = data if isinstance(data, list) else data.get("positions", data.get("data", []))
+                            activas_rest = []
+                            for p in pos_list:
+                                if isinstance(p, dict):
+                                    resolved = p.get("resolved") or p.get("is_resolved") or p.get("outcome") is not None
+                                    value = float(p.get("currentValue") or p.get("current_value") or p.get("value") or p.get("size") or 0)
+                                    if not resolved and value > 0:
+                                        activas_rest.append(p)
+                                        print(f"🔄 [SYNC REST] Posición activa: {str(p)[:120]}")
+                            if activas_rest:
+                                nuevo_valor = min(len(activas_rest), MAX_TRADES_ABIERTOS)
+                                print(f"🔄 [SYNC REST] Encontradas {len(activas_rest)} posiciones via REST")
+                        else:
+                            print(f"⚠️ [SYNC REST] Status {r.status_code}: {r.text[:100]}")
+                    except Exception as e:
+                        print(f"⚠️ [SYNC REST] Error: {e}")
 
                 if nuevo_valor != trades_abiertos:
                     print(f"🔄 [SYNC] Corrigiendo trades_abiertos: {trades_abiertos} → {nuevo_valor} (posiciones activas reales)")
