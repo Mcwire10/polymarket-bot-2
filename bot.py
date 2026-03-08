@@ -186,10 +186,14 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             simmer_id = importar_mercado(market_id, slug=slug)
             trade_id = simmer_id or market_id
 
-            # Garantizar mínimo 5 shares para Polymarket
+            # Monto fijo = STAKE. Verificar que alcance el mínimo de 5 shares de Polymarket.
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
-            monto_minimo_shares = round(5 * precio_impl + 0.10, 2)  # 5 shares + margen chico
-            monto_final = max(1.10, round(monto_minimo_shares, 2))  # mínimo $1.10 con margen holgado
+            shares_estimadas = STAKE / precio_impl
+            if shares_estimadas < 5:
+                # Ajustar solo si el stake no alcanza 5 shares
+                monto_final = round(5 * precio_impl + 0.05, 2)
+            else:
+                monto_final = STAKE  # caso normal: usamos stake fijo
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
