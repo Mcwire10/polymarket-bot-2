@@ -193,7 +193,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
                 # El mercado es muy caro para nuestro stake — skip
                 print(f"⏭️ Skip: precio muy alto ({precio_impl:.2f}), necesita ${monto_minimo} para 5 shares mínimas")
                 return False
-            monto_final = STAKE
+            monto_final = max(STAKE, 1.10)  # mínimo $1.10 para cubrir fees y redondeos
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
