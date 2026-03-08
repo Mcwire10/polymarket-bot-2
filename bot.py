@@ -48,7 +48,7 @@ def registrar_trade(motor, mercado, side, monto, ok):
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
 MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
 MAX_PORCENTAJE_SALDO = 0.30                             # no más del 30% del saldo total
-SALDO_INICIAL = 7.82                                    # saldo actual en USDC.e
+SALDO_INICIAL = 5.56                                    # saldo actual en USDC.e (se actualiza al arrancar)
 
 # === TELEGRAM ===
 def notify(msg):
@@ -88,7 +88,8 @@ def get_saldo_wallet():
             "params": [{"to": USDC_E_CONTRACT, "data": data_call}, "latest"],
             "id": 1
         }
-        r = requests.post("https://polygon-rpc.com", json=payload, timeout=10)
+        proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+        r = requests.post("https://polygon-rpc.com", json=payload, timeout=10, proxies=proxies)
         result = r.json().get("result", "0x0")
         raw = int(result, 16)
         saldo = round(raw / 1_000_000, 2)  # USDC.e tiene 6 decimales
@@ -827,25 +828,29 @@ def motor_sincronizacion():
         try:
             posiciones = client.get_positions()
             if posiciones is not None:
-                # Contar posiciones activas (no resueltas)
+                # Simmer devuelve lista de objetos Position (no dicts)
                 if isinstance(posiciones, list):
-                    activas = [p for p in posiciones if not p.get("resolved", False) and float(p.get("currentValue", 0) or 0) > 0]
-                    nuevo_valor = min(len(activas), MAX_TRADES_ABIERTOS)
-                elif isinstance(posiciones, dict):
-                    items = posiciones.get("positions", posiciones.get("data", []))
-                    activas = [p for p in items if not p.get("resolved", False) and float(p.get("currentValue", 0) or 0) > 0]
+                    activas = []
+                    for p in posiciones:
+                        try:
+                            # Intentar como objeto primero, luego como dict
+                            resolved = getattr(p, "resolved", None) or (p.get("resolved", False) if isinstance(p, dict) else False)
+                            value = getattr(p, "currentValue", None) or (p.get("currentValue", 0) if isinstance(p, dict) else 0)
+                            if not resolved and float(value or 0) > 0:
+                                activas.append(p)
+                        except:
+                            pass
                     nuevo_valor = min(len(activas), MAX_TRADES_ABIERTOS)
                 else:
-                    nuevo_valor = None
+                    nuevo_valor = 0
 
-                if nuevo_valor is not None and nuevo_valor != trades_abiertos:
+                if nuevo_valor != trades_abiertos:
                     print(f"🔄 [SYNC] Corrigiendo trades_abiertos: {trades_abiertos} → {nuevo_valor} (posiciones activas reales)")
                     with trade_lock:
                         trades_abiertos = nuevo_valor
                 else:
                     print(f"🔄 [SYNC] Posiciones OK: {trades_abiertos} trades abiertos")
             else:
-                # Si la API no responde, resetear a 0 para no bloquear el bot
                 if trades_abiertos >= MAX_TRADES_ABIERTOS:
                     print(f"⚠️ [SYNC] No se pudo verificar posiciones, reseteando contador a 0")
                     with trade_lock:
