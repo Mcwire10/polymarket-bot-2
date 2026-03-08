@@ -849,6 +849,17 @@ def motor_sincronizacion():
     time.sleep(60)  # esperar 1 min antes del primer check
     while True:
         try:
+            # === AUTO-REDEEM: cobrar posiciones ganadoras ===
+            try:
+                redimidos = client.auto_redeem()
+                if redimidos:
+                    for r in redimidos:
+                        if r.get("success"):
+                            msg = f"💸 Auto-redeem! Mercado cobrado: {r.get('market_id','?')} | tx: {r.get('tx_hash','?')[:12]}"
+                            print(msg)
+                            notify(msg)
+            except Exception as e:
+                print(f"⚠️ [SYNC] Auto-redeem error: {e}")
             posiciones = client.get_positions()
             if posiciones is not None:
                 # Simmer devuelve lista de objetos Position (no dicts)
@@ -899,9 +910,13 @@ POLITICA_KEYWORDS = [
     "approval", "vote", "poll", "party", "senate", "congress",
     "referendum", "ballot"
 ]
+EDGE_THRESHOLD_POLITICA = 0.15   # Gemini recomienda 12-15%, usamos 15% por seguridad
+POLITICA_MIN_VOLUME = 50000      # Solo mercados con >$50k volumen (evitar slippage)
+# Mercados excluidos: elecciones presidenciales USA (mercado muy eficiente)
+POLITICA_EXCLUIR = ["trump", "harris", "biden", "presidential election", "us president"]
 
 def get_mercados_politica():
-    """Busca mercados políticos activos en Polymarket con vencimiento <= 90 días"""
+    """Busca mercados políticos activos en Polymarket con vencimiento <= 90 días y volumen > $50k"""
     try:
         from datetime import datetime, timezone, timedelta
         limite = datetime.now(timezone.utc) + timedelta(days=90)
@@ -911,8 +926,22 @@ def get_mercados_politica():
         resultado = []
         for m in mercados:
             pregunta = m.get("question", "").lower()
+
+            # Filtro: debe tener keyword político
             if not any(kw in pregunta for kw in POLITICA_KEYWORDS):
                 continue
+
+            # Filtro: excluir mercados de elecciones USA (muy eficientes, Gemini lo recomienda)
+            if any(ex in pregunta for ex in POLITICA_EXCLUIR):
+                print(f"🗳️ [POLITICA] Skip USA presidencial: {pregunta[:60]}")
+                continue
+
+            # Filtro: volumen mínimo $50k para evitar slippage
+            volumen = float(m.get("volume", 0) or m.get("volumeNum", 0) or 0)
+            if volumen < POLITICA_MIN_VOLUME:
+                continue
+
+            # Filtro: vencimiento <= 90 días
             end_str = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
             if end_str:
                 try:
@@ -1019,7 +1048,7 @@ def motor_politica():
     while True:
         try:
             mercados = get_mercados_politica()
-            print(f"🗳️ [POLITICA] {len(mercados)} mercados políticos encontrados")
+            print(f"🗳️ [POLITICA] {len(mercados)} mercados políticos encontrados (volumen>$50k, no USA presidencial)")
 
             for mercado in mercados:
                 market_id = mercado.get("conditionId") or mercado.get("id")
@@ -1038,7 +1067,7 @@ def motor_politica():
                     edge = prob_estimada - precio_yes
                     print(f"🗳️ [POLITICA] {pregunta[:60]} | Estimado: {prob_estimada:.2f} | Poly: {precio_yes:.2f} | Edge: {edge:.2f} ({razon})")
 
-                    if abs(edge) >= 0.15:  # umbral más alto para política (15%)
+                    if abs(edge) >= EDGE_THRESHOLD_POLITICA:  # 15% recomendado por Gemini
                         side = "yes" if edge > 0 else "no"
                         registrar_senal("politica", pregunta, side, abs(edge))
                         print(f"🎯 [POLITICA] Edge! {side.upper()} | {pregunta[:60]}")
