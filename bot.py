@@ -19,6 +19,31 @@ ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
 COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
+# === WALLET ===
+WALLET_ADDRESS = os.environ.get("WALLET_ADDRESS", "")  # dirección pública de la wallet
+
+# === TRACKING DIARIO ===
+from datetime import datetime, timezone
+reporte_lock = threading.Lock()
+senales_del_dia = []   # {"motor", "mercado", "side", "edge", "hora"}
+trades_del_dia = []    # {"motor", "mercado", "side", "monto", "hora", "ok"}
+
+def registrar_senal(motor, mercado, side, edge):
+    with reporte_lock:
+        senales_del_dia.append({
+            "motor": motor, "mercado": mercado[:60],
+            "side": side, "edge": round(edge, 2),
+            "hora": datetime.now(timezone.utc).strftime("%H:%M")
+        })
+
+def registrar_trade(motor, mercado, side, monto, ok):
+    with reporte_lock:
+        trades_del_dia.append({
+            "motor": motor, "mercado": mercado[:60],
+            "side": side, "monto": monto, "ok": ok,
+            "hora": datetime.now(timezone.utc).strftime("%H:%M")
+        })
+
 # === GESTIÓN DE RIESGO ===
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
 MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
@@ -134,12 +159,14 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
                 )
                 print(msg)
                 notify(msg)
+                registrar_trade(razon.split()[0], str(market_id)[:60], side, monto_final, ok=True)
                 return True
             else:
                 trades_abiertos -= 1  # revertir si falló
                 err = f"❌ Trade fallido: {getattr(result, 'error', result)}"
                 print(err)
                 notify(err)
+                registrar_trade(razon.split()[0], str(market_id)[:60], side, monto_final, ok=False)
                 return False
         except Exception as e:
             err = f"❌ Error ejecutando trade: {e}\nMercado: {str(market_id)[:40]}..."
@@ -361,6 +388,7 @@ def motor_climatico():
                 if resultado:
                     side, edge = resultado
                     pregunta = mercado.get("question", "")[:60]
+                    registrar_senal("clima", mercado.get("question",""), side, edge)
                     print(f"🎯 [CLIMA] Edge! {side.upper()} | Edge: {edge:.2f} | {pregunta}")
                     precio_yes = get_precio_yes(mercado)
                     precio_side = precio_yes if side == "yes" else (1 - precio_yes)
@@ -527,6 +555,7 @@ def motor_crypto():
 
                 if abs(edge) >= EDGE_THRESHOLD_CRYPTO:
                     side = "yes" if edge > 0 else "no"
+                    registrar_senal("crypto", pregunta, side, abs(edge))
                     print(f"🎯 [CRYPTO] Edge! {side.upper()} | {pregunta[:60]}")
                     precio_side = precio_yes if side == "yes" else (1 - precio_yes)
                     ok = ejecutar_trade(
@@ -724,6 +753,7 @@ def motor_deportes():
 
                 if abs(edge) >= EDGE_THRESHOLD_SPORTS:
                     side = "yes" if edge > 0 else "no"
+                    registrar_senal("deportes", pregunta, side, abs(edge))
                     print(f"🎯 [DEPORTES] Edge! {side.upper()} | {pregunta[:60]}")
                     ok = ejecutar_trade(
                         market_id=market_id,
@@ -745,16 +775,336 @@ def motor_deportes():
             time.sleep(60)
 
 # ============================================================
+# MOTOR 5: SINCRONIZACIÓN DE POSICIONES
+# ============================================================
+def get_saldo_wallet():
+    """Consulta el saldo USDC.e de la wallet en Polygon via API pública"""
+    if not WALLET_ADDRESS:
+        return None
+    try:
+        # USDC.e en Polygon
+        USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        url = (
+            f"https://api.polygonscan.com/api"
+            f"?module=account&action=tokenbalance"
+            f"&contractaddress={USDC_E_CONTRACT}"
+            f"&address={WALLET_ADDRESS}"
+            f"&tag=latest&apikey=YourApiKeyToken"
+        )
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("status") == "1":
+            raw = int(data["result"])
+            return round(raw / 1_000_000, 2)  # USDC tiene 6 decimales
+    except Exception as e:
+        print(f"⚠️ [SALDO] Error consultando wallet: {e}")
+    return None
+
+# ============================================================
+# MOTOR 5: SINCRONIZACIÓN DE POSICIONES
+# ============================================================
+def motor_sincronizacion():
+    """Cada 30 min consulta las posiciones reales en Simmer y corrige trades_abiertos"""
+    global trades_abiertos
+    print("🔄 [SYNC] Motor de sincronización iniciado")
+    time.sleep(60)  # esperar 1 min antes del primer check
+    while True:
+        try:
+            posiciones = client.get_positions()
+            if posiciones is not None:
+                # Contar posiciones activas (no resueltas)
+                if isinstance(posiciones, list):
+                    activas = [p for p in posiciones if not p.get("resolved", False) and float(p.get("currentValue", 0) or 0) > 0]
+                    nuevo_valor = min(len(activas), MAX_TRADES_ABIERTOS)
+                elif isinstance(posiciones, dict):
+                    items = posiciones.get("positions", posiciones.get("data", []))
+                    activas = [p for p in items if not p.get("resolved", False) and float(p.get("currentValue", 0) or 0) > 0]
+                    nuevo_valor = min(len(activas), MAX_TRADES_ABIERTOS)
+                else:
+                    nuevo_valor = None
+
+                if nuevo_valor is not None and nuevo_valor != trades_abiertos:
+                    print(f"🔄 [SYNC] Corrigiendo trades_abiertos: {trades_abiertos} → {nuevo_valor} (posiciones activas reales)")
+                    with trade_lock:
+                        trades_abiertos = nuevo_valor
+                else:
+                    print(f"🔄 [SYNC] Posiciones OK: {trades_abiertos} trades abiertos")
+            else:
+                # Si la API no responde, resetear a 0 para no bloquear el bot
+                if trades_abiertos >= MAX_TRADES_ABIERTOS:
+                    print(f"⚠️ [SYNC] No se pudo verificar posiciones, reseteando contador a 0")
+                    with trade_lock:
+                        trades_abiertos = 0
+        except Exception as e:
+            print(f"⚠️ [SYNC] Error sincronizando posiciones: {e}")
+            # En caso de error, si llevamos mucho tiempo bloqueados, resetear
+            if trades_abiertos >= MAX_TRADES_ABIERTOS:
+                print(f"⚠️ [SYNC] Reset preventivo de trades_abiertos por error")
+                with trade_lock:
+                    trades_abiertos = 0
+        time.sleep(1800)  # cada 30 minutos
+
+# ============================================================
+# MOTOR 7: BOT POLÍTICO — Polls vs Polymarket
+# ============================================================
+
+# Fuentes de polling: Wikipedia/Ballotpedia aggregators + 538-compatible APIs
+# Estrategia: comparar probabilidad de encuestas con precio en Polymarket
+
+POLITICA_KEYWORDS = [
+    "election", "elect", "win", "president", "prime minister",
+    "approval", "vote", "poll", "party", "senate", "congress",
+    "referendum", "ballot"
+]
+
+def get_mercados_politica():
+    """Busca mercados políticos activos en Polymarket con vencimiento <= 90 días"""
+    try:
+        from datetime import datetime, timezone, timedelta
+        limite = datetime.now(timezone.utc) + timedelta(days=90)
+        url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume&ascending=false"
+        r = requests.get(url, timeout=10)
+        mercados = r.json() if isinstance(r.json(), list) else []
+        resultado = []
+        for m in mercados:
+            pregunta = m.get("question", "").lower()
+            if not any(kw in pregunta for kw in POLITICA_KEYWORDS):
+                continue
+            end_str = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
+            if end_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+                    if end_dt > limite:
+                        continue
+                except:
+                    pass
+            resultado.append(m)
+        return resultado
+    except Exception as e:
+        print(f"⚠️ [POLITICA] Error obteniendo mercados: {e}")
+        return []
+
+def get_prob_politica_wikipedia(pregunta):
+    """
+    Consulta Wikipedia para obtener datos de aprobación/encuestas.
+    Estrategia simple: busca artículos de aprobación presidencial o encuestas electorales.
+    Retorna probabilidad estimada o None si no encuentra datos útiles.
+    """
+    try:
+        # Extraer entidades clave de la pregunta
+        pregunta_lower = pregunta.lower()
+
+        # Detectar tipo de mercado
+        es_aprobacion = "approval" in pregunta_lower
+        es_eleccion = any(w in pregunta_lower for w in ["win", "elect", "president", "prime minister"])
+
+        # Buscar en Wikipedia API
+        search_term = None
+        if "trump" in pregunta_lower:
+            search_term = "Donald Trump job approval rating"
+        elif "biden" in pregunta_lower:
+            search_term = "Joe Biden job approval rating"
+        elif "macron" in pregunta_lower:
+            search_term = "Emmanuel Macron approval rating"
+        elif "milei" in pregunta_lower:
+            search_term = "Javier Milei approval rating"
+        else:
+            # Extraer nombre propio (primera palabra en mayúscula)
+            words = pregunta.split()
+            nombres = [w for w in words if w[0].isupper() and len(w) > 3]
+            if nombres:
+                search_term = f"{nombres[0]} approval rating poll"
+
+        if not search_term:
+            return None
+
+        # Wikipedia search API
+        url = f"https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={requests.utils.quote(search_term)}&format=json&srlimit=1"
+        r = requests.get(url, timeout=8)
+        data = r.json()
+        results = data.get("query", {}).get("search", [])
+        if not results:
+            return None
+
+        # Por ahora retorna None — la lógica real requiere parsear el artículo
+        # En la próxima iteración integramos 538 API o PredictIt
+        return None
+
+    except Exception as e:
+        print(f"⚠️ [POLITICA] Error Wikipedia: {e}")
+        return None
+
+def get_prob_politica_polymarket_history(market_id):
+    """
+    Estrategia alternativa: usar el historial de precios del mismo mercado.
+    Si el precio cayó mucho en los últimos días, puede haber reversión a la media.
+    Retorna (prob_estimada, razon) o None.
+    """
+    try:
+        url = f"https://clob.polymarket.com/prices-history?market={market_id}&interval=1d&fidelity=1"
+        r = requests.get(url, timeout=8)
+        data = r.json()
+        history = data.get("history", [])
+        if len(history) < 5:
+            return None
+
+        precios = [float(h["p"]) for h in history[-7:]]  # últimos 7 días
+        precio_actual = precios[-1]
+        precio_hace_7d = precios[0]
+        promedio = sum(precios) / len(precios)
+
+        # Si el precio cayó > 20% en 7 días, puede ser oversold → señal YES
+        caida = precio_hace_7d - precio_actual
+        if caida > 0.20 and precio_actual < 0.40:
+            return (promedio, f"reversión media (cayó {caida:.2f} en 7d)")
+
+        # Si subió > 20% en 7 días, puede ser overbought → señal NO
+        subida = precio_actual - precio_hace_7d
+        if subida > 0.20 and precio_actual > 0.60:
+            return (promedio, f"corrección posible (subió {subida:.2f} en 7d)")
+
+        return None
+    except Exception as e:
+        print(f"⚠️ [POLITICA] Error history: {e}")
+        return None
+
+mercados_politica_apostados = set()
+
+def motor_politica():
+    print("🗳️ [POLITICA] Motor político iniciado")
+    time.sleep(120)  # arrancar después de los otros motores
+    while True:
+        try:
+            mercados = get_mercados_politica()
+            print(f"🗳️ [POLITICA] {len(mercados)} mercados políticos encontrados")
+
+            for mercado in mercados:
+                market_id = mercado.get("conditionId") or mercado.get("id")
+                if not market_id or market_id in mercados_politica_apostados:
+                    continue
+
+                pregunta = mercado.get("question", "")
+                precio_yes = get_precio_yes(mercado)
+                if not precio_yes or precio_yes <= 0.05 or precio_yes >= 0.95:
+                    continue
+
+                # Estrategia 1: mean reversion por historial de precio
+                resultado_history = get_prob_politica_polymarket_history(market_id)
+                if resultado_history:
+                    prob_estimada, razon = resultado_history
+                    edge = prob_estimada - precio_yes
+                    print(f"🗳️ [POLITICA] {pregunta[:60]} | Estimado: {prob_estimada:.2f} | Poly: {precio_yes:.2f} | Edge: {edge:.2f} ({razon})")
+
+                    if abs(edge) >= 0.15:  # umbral más alto para política (15%)
+                        side = "yes" if edge > 0 else "no"
+                        registrar_senal("politica", pregunta, side, abs(edge))
+                        print(f"🎯 [POLITICA] Edge! {side.upper()} | {pregunta[:60]}")
+                        ok = ejecutar_trade(
+                            market_id=market_id,
+                            side=side,
+                            razon=f"Bot politica | {razon}",
+                            precio_ref=precio_yes if side == "yes" else (1 - precio_yes),
+                            slug=mercado.get("slug")
+                        )
+                        if ok:
+                            mercados_politica_apostados.add(market_id)
+
+                time.sleep(2)
+
+            time.sleep(1800)  # cada 30 minutos
+
+        except Exception as e:
+            print(f"❌ [POLITICA] Error general: {e}")
+            time.sleep(60)
+
+# ============================================================
+# MOTOR 6: REPORTE DIARIO + HEARTBEAT
+# ============================================================
+def motor_reporte():
+    """Cada hora envía saldo al Telegram. A las 23:00 UTC manda reporte del día."""
+    global senales_del_dia, trades_del_dia
+    print("📊 [REPORTE] Motor de reporte iniciado")
+    ultimo_dia_reportado = None
+
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+
+            # === HEARTBEAT CADA HORA ===
+            saldo = get_saldo_wallet()
+            saldo_txt = f"${saldo}" if saldo is not None else "N/D"
+            heartbeat = (
+                f"💓 Bot activo — {now.strftime('%H:%M')} UTC\n"
+                f"💰 Saldo wallet: {saldo_txt} USDC.e\n"
+                f"📈 Trades abiertos: {trades_abiertos}/{MAX_TRADES_ABIERTOS}\n"
+                f"🎯 Señales hoy: {len(senales_del_dia)} | Trades hoy: {len(trades_del_dia)}"
+            )
+            print(f"📊 [REPORTE] {heartbeat.replace(chr(10), ' | ')}")
+            notify(heartbeat)
+
+            # === REPORTE DIARIO A LAS 23:00 UTC ===
+            if now.hour == 23 and ultimo_dia_reportado != now.date():
+                ultimo_dia_reportado = now.date()
+
+                with reporte_lock:
+                    s_copy = list(senales_del_dia)
+                    t_copy = list(trades_del_dia)
+                    senales_del_dia.clear()
+                    trades_del_dia.clear()
+
+                # Agrupar señales por motor
+                por_motor = {}
+                for s in s_copy:
+                    por_motor.setdefault(s["motor"], []).append(s)
+
+                resumen_senales = ""
+                for motor, lista in por_motor.items():
+                    emoji = {"clima": "🌦️", "crypto": "₿", "deportes": "⚽", "copy": "🔁", "politica": "🗳️"}.get(motor, "📌")
+                    resumen_senales += f"{emoji} {motor.upper()}: {len(lista)} señales\n"
+                    for s in lista[:3]:  # máximo 3 ejemplos por motor
+                        resumen_senales += f"   {s['hora']} | {s['side'].upper()} | edge {s['edge']} | {s['mercado'][:40]}\n"
+                    if len(lista) > 3:
+                        resumen_senales += f"   ... y {len(lista)-3} más\n"
+
+                trades_ok = [t for t in t_copy if t["ok"]]
+                trades_fail = [t for t in t_copy if not t["ok"]]
+
+                reporte = (
+                    f"📊 REPORTE DIARIO — {now.strftime('%d/%m/%Y')}\n"
+                    f"{'='*30}\n"
+                    f"💰 Saldo wallet: {saldo_txt} USDC.e\n"
+                    f"\n"
+                    f"🎯 SEÑALES DETECTADAS: {len(s_copy)}\n"
+                    f"{resumen_senales}"
+                    f"\n"
+                    f"✅ Trades ejecutados: {len(trades_ok)}\n"
+                    f"❌ Trades fallidos: {len(trades_fail)}\n"
+                )
+                if trades_ok:
+                    reporte += "\nDetalle trades OK:\n"
+                    for t in trades_ok:
+                        reporte += f"  {t['hora']} {t['motor']} | {t['side'].upper()} ${t['monto']} | {t['mercado'][:35]}\n"
+
+                print(f"📊 [REPORTE] Enviando reporte diario")
+                notify(reporte)
+
+            time.sleep(3600)  # esperar 1 hora
+
+        except Exception as e:
+            print(f"⚠️ [REPORTE] Error: {e}")
+            time.sleep(3600)
+
+# ============================================================
 # MAIN
 # ============================================================
-print("🤖 Bot iniciado con 4 motores en paralelo")
+print("🤖 Bot iniciado con 7 motores en paralelo")
 print(f"👀 Copy trading: {len(TRADERS)} traders | Rango precio: {COPY_MIN_PRICE}-{COPY_MAX_PRICE}")
 print(f"🌦️ Bot climático: Open-Meteo | Edge mínimo: {EDGE_THRESHOLD*100:.0f}%")
 print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD_CRYPTO*100:.0f}%")
 print(f"⚽ Bot deportes: The Odds API | Edge mínimo: {EDGE_THRESHOLD_SPORTS*100:.0f}%")
 print(f"💰 Stake fijo: ${STAKE}")
 notify(
-    f"🤖 Bot iniciado con 4 motores!\n"
+    f"🤖 Bot iniciado con 7 motores!\n"
     f"💰 Stake: ${STAKE}\n"
     f"👀 Copiando {len(TRADERS)} traders\n"
     f"🌦️ Bot climático activo\n"
@@ -766,11 +1116,17 @@ t1 = threading.Thread(target=motor_copy_trading, daemon=True)
 t2 = threading.Thread(target=motor_climatico, daemon=True)
 t3 = threading.Thread(target=motor_crypto, daemon=True)
 t4 = threading.Thread(target=motor_deportes, daemon=True)
+t5 = threading.Thread(target=motor_sincronizacion, daemon=True)
+t6 = threading.Thread(target=motor_reporte, daemon=True)
+t7 = threading.Thread(target=motor_politica, daemon=True)
 
 t1.start()
 t2.start()
 t3.start()
 t4.start()
+t5.start()
+t6.start()
+t7.start()
 
 while True:
     time.sleep(60)
