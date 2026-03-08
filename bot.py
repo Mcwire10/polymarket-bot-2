@@ -72,10 +72,10 @@ else:
 
 # === SIMMER CLIENT ===
 WALLET_PRIVATE_KEY = os.environ.get("WALLET_PRIVATE_KEY", "").strip()
-# Normalizar: Simmer espera la key SIN prefijo 0x
-if WALLET_PRIVATE_KEY.startswith("0x") or WALLET_PRIVATE_KEY.startswith("0X"):
-    WALLET_PRIVATE_KEY = WALLET_PRIVATE_KEY[2:]
-print(f"🔑 Private key: {'OK (' + str(len(WALLET_PRIVATE_KEY)) + ' chars)' if WALLET_PRIVATE_KEY else 'NO ENCONTRADA'}")
+# Simmer requiere prefijo 0x
+if WALLET_PRIVATE_KEY and not WALLET_PRIVATE_KEY.startswith("0x"):
+    WALLET_PRIVATE_KEY = "0x" + WALLET_PRIVATE_KEY
+print(f"🔑 Private key: {'OK (' + str(len(WALLET_PRIVATE_KEY)) + ' chars, con 0x)' if WALLET_PRIVATE_KEY else 'NO ENCONTRADA'}")
 client = SimmerClient(
     api_key=SIMMER_API_KEY,
     venue="polymarket",
