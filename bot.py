@@ -12,12 +12,12 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 raw_wallets = os.environ.get("SIMMER_COPYTRADING_WALLETS", "")
 TRADERS = [w.strip() for w in raw_wallets.split(",") if w.strip()]
 
-EDGE_THRESHOLD = float(os.environ.get("EDGE_THRESHOLD", "0.05"))
+EDGE_THRESHOLD = float(os.environ.get("EDGE_THRESHOLD", "0.12"))  # 12% mínimo para clima — Open-Meteo no es oráculo
 EDGE_THRESHOLD_CRYPTO = float(os.environ.get("EDGE_THRESHOLD_CRYPTO", "0.10"))  # más alto para crypto
 EDGE_THRESHOLD_SPORTS = float(os.environ.get("EDGE_THRESHOLD_SPORTS", "0.07"))  # 7% para deportes
 ODDS_API_KEY = os.environ.get("ODDS_API_KEY")
-COPY_MIN_PRICE = 0.20
-COPY_MAX_PRICE = 0.75
+COPY_MIN_PRICE = 0.10  # ampliado para no perderse trades buenos
+COPY_MAX_PRICE = 0.85
 
 # === WALLET ===
 WALLET_ADDRESS = os.environ.get("POLY_WALLET_ADDR", "")  # dirección pública de la wallet
@@ -46,7 +46,7 @@ def registrar_trade(motor, mercado, side, monto, ok):
 
 # === GESTIÓN DE RIESGO ===
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
-MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
+MAX_TRADES_ABIERTOS = 2                                 # máximo 2 posiciones — conservador mientras saldo < $5
 MAX_PORCENTAJE_SALDO = 0.50                             # no más del 50% del saldo total
 SALDO_INICIAL = 5.56                                    # saldo actual en USDC.e (se actualiza al arrancar)
 
@@ -278,7 +278,10 @@ def motor_copy_trading():
 
                     trades_copiados.add(trade_id)
 
-                    if side not in ("BUY", "YES"):
+                    # Debug: loguear todos los trades que llegan
+                    print(f"🔍 [COPY] Trade raw: id={trade_id[:8]} side={side} price={price} asset={str(asset)[:20]}")
+                    if side not in ("BUY", "YES", "BUY_YES", "LONG"):
+                        print(f"⏭️ [COPY] Skip side={side}")
                         continue
                     if not (COPY_MIN_PRICE <= price <= COPY_MAX_PRICE):
                         print(f"⏭️ [COPY] Precio {price} fuera de rango, skip")
@@ -294,18 +297,28 @@ def motor_copy_trading():
                             else:
                                 trade_dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
                             edad = datetime.now(timezone.utc) - trade_dt
-                            if edad > timedelta(hours=2):
-                                print(f"⏭️ [COPY] Trade de {wallet[:8]} tiene {edad.seconds//3600}h, muy viejo, skip")
+                            if edad > timedelta(minutes=15):
+                                print(f"⏭️ [COPY] Trade de {wallet[:8]} tiene {int(edad.total_seconds()//60)}min, muy viejo (máx 15min), skip")
                                 continue
                         except Exception as e:
                             print(f"⚠️ [COPY] No se pudo parsear timestamp: {e}")
 
-                    print(f"🔔 [COPY] Trade detectado de {wallet[:8]}... | Price: {price}")
+                    # Filtro volumen: solo mercados con > $50k para no comprar en el techo
+                    volumen = float(trade.get("volume") or trade.get("volume24hr") or trade.get("liquidity") or 0)
+                    if volumen > 0 and volumen < 50000:
+                        print(f"⏭️ [COPY] Volumen ${volumen:.0f} < $50k, skip")
+                        continue
+
+                    # Filtro slippage: precio actual no debe ser > 3% más caro que el del trader
+                    precio_actual = price  # se refinará en ejecutar_trade
+                    slippage_max = price * 1.03
+                    print(f"🔔 [COPY] Trade detectado de {wallet[:8]}... | Price: {price} | Slippage máx: {slippage_max:.3f}")
                     ejecutar_trade(
                         market_id=asset,
                         side="yes",
                         razon=f"Copy de {wallet[:8]} @ {price}",
-                        precio_ref=price
+                        precio_ref=price,
+                        precio_max=slippage_max
                     )
 
             time.sleep(30)
@@ -399,23 +412,25 @@ def get_temperatura_max(ciudad):
         print(f"⚠️ [CLIMA] Error temperatura para {ciudad}: {e}")
         return None, None
 
-def prob_temperatura_bucket(temp_real, temp_objetivo, margen=0.7):
+def prob_temperatura_bucket(temp_real, temp_objetivo, margen=0.7, sigma_override=None):
     """
-    Convierte la temperatura real en probabilidad de que caiga en el bucket del mercado.
-    Si el pronóstico está dentro del margen del bucket → prob alta.
-    Si está lejos → prob baja.
+    Probabilidad real usando distribución normal.
+    sigma varía según horizonte: D+0=0.6°C, D+1=1.5°C, D+2=2.0°C (recomendación Gemini)
     """
     if temp_real is None:
         return None
-    diferencia = abs(temp_real - temp_objetivo)
-    if diferencia <= margen:
-        return 0.80  # muy probable
-    elif diferencia <= margen * 2:
-        return 0.50
-    elif diferencia <= margen * 3:
-        return 0.20
+    if sigma_override is not None:
+        sigma = sigma_override
     else:
-        return 0.05  # muy improbable
+        # Fallback: detectar por escala de temperatura
+        sigma = 2.7 if abs(temp_objetivo) > 40 else 1.5
+    limite_inf = temp_objetivo - margen
+    limite_sup = temp_objetivo + margen
+    # P(limite_inf <= X <= limite_sup) donde X ~ N(temp_real, sigma)
+    z_inf = (limite_inf - temp_real) / sigma
+    z_sup = (limite_sup - temp_real) / sigma
+    prob = norm_cdf(z_sup) - norm_cdf(z_inf)
+    return round(prob, 3)
 
 def get_mercados_polymarket(keywords):
     """Busca mercados filtrando por pregunta localmente — más confiable que el search de Polymarket"""
@@ -457,6 +472,7 @@ def get_precio_yes(mercado):
         return None
 
 def analizar_mercado_clima(mercado):
+    from datetime import datetime, timezone
     pregunta = mercado.get("question", "").lower()
     precio_yes = get_precio_yes(mercado)
     if not precio_yes or precio_yes <= 0:
@@ -469,6 +485,20 @@ def analizar_mercado_clima(mercado):
             break
     if not ciudad_detectada:
         return None
+
+    # Detectar horizonte temporal para sigma variable (recomendación Gemini)
+    horizonte_dias = 1  # default D+1
+    try:
+        end_date_str = mercado.get("endDate") or mercado.get("end_date") or mercado.get("closeTime") or ""
+        if end_date_str:
+            end_dt = datetime.fromisoformat(str(end_date_str).replace("Z", "+00:00"))
+            horizonte_dias = max(0, (end_dt.date() - datetime.now(timezone.utc).date()).days)
+    except:
+        pass
+    # Sigma según Gemini: D+0=0.6, D+1=1.5, D+2=2.0
+    sigma_c = {0: 0.6, 1: 1.5, 2: 2.0}.get(horizonte_dias, 2.0)
+    sigma_f = sigma_c * 1.8
+    print(f"🌦️ [CLIMA] Horizonte D+{horizonte_dias} → sigma {sigma_c}°C/{sigma_f:.1f}°F")
 
     # Verificar que la pregunta sea realmente sobre clima
     palabras_clima = ["rain", "rainfall", "precipitation", "storm", "snow", "flood", "temperature", "weather", "hurricane", "tornado", "degrees", "celsius", "fahrenheit", "humid", "wind"]
@@ -496,7 +526,8 @@ def analizar_mercado_clima(mercado):
         if temp_c is None:
             return None
         temp_comparar = temp_f if es_fahrenheit else temp_c
-        prob_real = prob_temperatura_bucket(temp_comparar, temp_objetivo)
+        sigma_usar = sigma_f if es_fahrenheit else sigma_c
+        prob_real = prob_temperatura_bucket(temp_comparar, temp_objetivo, sigma_override=sigma_usar)
         print(f"📊 [CLIMA] {ciudad_detectada} | Temp real: {temp_comparar}{'°F' if es_fahrenheit else '°C'} | Objetivo: {temp_objetivo} | Prob bucket: {prob_real:.2f}")
     elif es_precipitacion:
         prob_real = get_precipitacion_prob(ciudad_detectada)
@@ -513,8 +544,8 @@ def analizar_mercado_clima(mercado):
     print(f"📊 [CLIMA] {ciudad_detectada} | Mercado: {precio_yes:.2f} | Open-Meteo: {prob_real:.2f} | Edge YES: {edge_yes:.2f}")
 
     # Filtro: mercados extremos (< 0.10 o > 0.90) suelen tener razón, Open-Meteo no es suficiente
-    if precio_yes < 0.10 or precio_yes > 0.90:
-        print(f"⏭️ [CLIMA] Skip: precio extremo {precio_yes:.2f}, mercado probablemente correcto")
+    if precio_yes < 0.15 or precio_yes > 0.75:
+        print(f"⏭️ [CLIMA] Skip: precio extremo {precio_yes:.2f}, mercado demasiado sesgado")
         return None
 
     if edge_yes >= EDGE_THRESHOLD:
@@ -554,10 +585,27 @@ def motor_climatico():
                     )
                     if ok:
                         mercados_clima_apostados.add(market_id)
-            time.sleep(600)
+            # Esperar hasta el próximo ciclo GFS: 00:15, 06:15, 12:15, 18:15 UTC
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            hora = now.hour
+            minuto = now.minute
+            ciclos_gfs = [0, 6, 12, 18]
+            proximos = []
+            for c in ciclos_gfs:
+                mins_desde_medianoche = c * 60 + 15
+                mins_ahora = hora * 60 + minuto
+                diff = mins_desde_medianoche - mins_ahora
+                if diff <= 0:
+                    diff += 24 * 60
+                proximos.append(diff)
+            espera_min = min(proximos)
+            espera_seg = espera_min * 60
+            print(f"🌦️ [CLIMA] Próximo ciclo GFS en {espera_min:.0f} min")
+            time.sleep(min(espera_seg, 3600))  # máximo 1h de espera
         except Exception as e:
             print(f"❌ [CLIMA] Error general: {e}")
-            time.sleep(60)
+            time.sleep(300)
 
 # ============================================================
 # MOTOR 3: BOT CRYPTO
@@ -1052,9 +1100,16 @@ def get_simmer_divergencias():
     try:
         url = "https://api.simmer.markets/api/sdk/opportunities"
         headers = {"Authorization": f"Bearer {SIMMER_API_KEY}"}
-        r = requests.get(url, timeout=10, proxies={"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None)
+        r = requests.get(url, headers=headers, timeout=10, proxies={"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None)
+        print(f"🗳️ [POLITICA] Simmer status: {r.status_code} | Response: {r.text[:150]}")
+        if r.status_code != 200:
+            return []
         data = r.json()
-        divergencias = data.get("high_divergence", [])
+        # Simmer puede devolver lista directa o dict con high_divergence
+        if isinstance(data, list):
+            divergencias = data
+        else:
+            divergencias = data.get("high_divergence", data.get("opportunities", data.get("data", [])))
         print(f"🗳️ [POLITICA] Simmer divergencias encontradas: {len(divergencias)}")
         return divergencias
     except Exception as e:
@@ -1193,6 +1248,11 @@ def motor_politica():
     time.sleep(120)  # arrancar después de los otros motores
     while True:
         try:
+            # Gemini recomienda no operar política con < $5 (bloquea capital semanas)
+            if saldo_wallet < 5.0:
+                print(f"⏸️ [POLITICA] Saldo ${saldo_wallet:.2f} < $5 — motor pausado hasta tener más capital")
+                time.sleep(1800)
+                continue
             # === FUENTE 1: Divergencias IA de Simmer ===
             divergencias = get_simmer_divergencias()
             for div in divergencias:
