@@ -21,7 +21,7 @@ COPY_MAX_PRICE = 0.75
 
 # === GESTIÓN DE RIESGO ===
 STAKE = float(os.environ.get("MAX_USD", "1"))          # $1 por trade
-MAX_TRADES_ABIERTOS = 1                                 # máximo 1 posición a la vez
+MAX_TRADES_ABIERTOS = 3                                 # máximo 3 posiciones simultáneas
 MAX_PORCENTAJE_SALDO = 0.30                             # no más del 30% del saldo total
 SALDO_INICIAL = 7.82                                    # saldo actual en USDC.e
 
@@ -103,7 +103,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             # Garantizar mínimo 5 shares para Polymarket
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
             monto_minimo_shares = round(5 * precio_impl + 0.10, 2)  # 5 shares + margen chico
-            monto_final = max(STAKE, monto_minimo_shares)
+            monto_final = max(round(STAKE + 0.01, 2), round(monto_minimo_shares, 2))  # mínimo $1.01 para evitar redondeo
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
@@ -118,7 +118,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
                 precio_con_slippage = round(min(precio_impl * 1.02, 0.95), 4)
 
             print(f"💵 Monto trade: ${monto_final} (precio ref: {precio_impl:.2f} → con slippage: {precio_con_slippage})")
-            trade_kwargs = dict(market_id=trade_id, side=side, amount=monto_final, order_type="GTC")
+            trade_kwargs = dict(market_id=trade_id, side=side, amount=monto_final, order_type="GTC", allow_rebuy=True)
             if precio_con_slippage:
                 trade_kwargs["price"] = precio_con_slippage
             result = client.trade(**trade_kwargs)
@@ -630,21 +630,27 @@ def buscar_mercado_partido_polymarket(home, away):
         url = "https://gamma-api.polymarket.com/markets?active=true&closed=false&limit=100&order=volume&ascending=false"
         r = requests.get(url, timeout=10)
         mercados = r.json() if isinstance(r.json(), list) else []
-        home_words = home.lower().split()[:2]
-        away_words = away.lower().split()[:2]
-        # Palabras que indican mercado de apuestas de sets/games (excluir)
-        excluir_keywords = ["o/u", "over", "under", "set ", "game", "handicap", "spread", "total", "quarter", "half"]
+
+        # Usar palabras de al menos 4 letras para evitar falsos matches
+        home_words = [w for w in home.lower().split() if len(w) >= 4][:2]
+        away_words = [w for w in away.lower().split() if len(w) >= 4][:2]
+
+        if not home_words or not away_words:
+            return None
+
+        excluir_keywords = ["o/u", "over", "under", "set ", "handicap", "spread", "total", "quarter", "half", "prime minister", "president", "election", "political"]
         candidatos = []
         for m in mercados:
             pregunta = m.get("question", "").lower()
-            if any(w in pregunta for w in home_words) and any(w in pregunta for w in away_words):
-                # Preferir mercados de ganador directo (sin sets/totales)
+            # Requiere match de AMBAS palabras de AMBOS equipos (más estricto)
+            home_match = sum(1 for w in home_words if w in pregunta)
+            away_match = sum(1 for w in away_words if w in pregunta)
+            if home_match >= 1 and away_match >= 1:
                 tiene_excluido = any(ex in pregunta for ex in excluir_keywords)
-                candidatos.append((m, tiene_excluido))
-        # Primero los que NO tienen keywords de excluir
-        candidatos.sort(key=lambda x: x[1])
+                if not tiene_excluido:  # descartar directamente si tiene keywords malos
+                    candidatos.append(m)
         if candidatos:
-            return candidatos[0][0]
+            return candidatos[0]
     except Exception as e:
         print(f"⚠️ [DEPORTES] Error buscando mercado: {e}")
     return None
