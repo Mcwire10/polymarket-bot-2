@@ -73,6 +73,40 @@ else:
 # === SIMMER CLIENT ===
 client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 
+def get_saldo_wallet():
+    """Consulta el saldo USDC.e de la wallet en Polygon via RPC público"""
+    if not WALLET_ADDRESS:
+        return None
+    try:
+        # balanceOf(address) en USDC.e Polygon via RPC público
+        USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+        # Encode balanceOf(address): selector 0x70a08231 + address padded a 32 bytes
+        addr_clean = WALLET_ADDRESS.lower().replace("0x", "").zfill(64)
+        data_call = "0x70a08231" + addr_clean
+        payload = {
+            "jsonrpc": "2.0", "method": "eth_call",
+            "params": [{"to": USDC_E_CONTRACT, "data": data_call}, "latest"],
+            "id": 1
+        }
+        r = requests.post("https://polygon-rpc.com", json=payload, timeout=10)
+        result = r.json().get("result", "0x0")
+        raw = int(result, 16)
+        saldo = round(raw / 1_000_000, 2)  # USDC.e tiene 6 decimales
+        return saldo
+    except Exception as e:
+        print(f"⚠️ [SALDO] Error consultando wallet: {e}")
+    return None
+
+def actualizar_saldo_inicial():
+    """Actualiza SALDO_INICIAL con el saldo real de la wallet"""
+    global SALDO_INICIAL
+    saldo = get_saldo_wallet()
+    if saldo and saldo > 0:
+        SALDO_INICIAL = saldo
+        print(f"💰 Saldo actualizado: ${SALDO_INICIAL} USDC.e")
+    else:
+        print(f"⚠️ No se pudo leer saldo, usando ${SALDO_INICIAL} (hardcoded)")
+
 # === APPROVALS (una sola vez al iniciar) ===
 try:
     print("🔓 Configurando approvals de Polymarket...")
@@ -80,6 +114,9 @@ try:
     print("✅ Approvals configurados")
 except Exception as e:
     print(f"⚠️ Error en approvals: {e}")
+
+# Leer saldo real de la wallet al iniciar
+actualizar_saldo_inicial()
 
 # === LOCK para evitar trades simultáneos ===
 trade_lock = threading.Lock()
@@ -777,28 +814,6 @@ def motor_deportes():
 # ============================================================
 # MOTOR 5: SINCRONIZACIÓN DE POSICIONES
 # ============================================================
-def get_saldo_wallet():
-    """Consulta el saldo USDC.e de la wallet en Polygon via API pública"""
-    if not WALLET_ADDRESS:
-        return None
-    try:
-        # USDC.e en Polygon
-        USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
-        url = (
-            f"https://api.polygonscan.com/api"
-            f"?module=account&action=tokenbalance"
-            f"&contractaddress={USDC_E_CONTRACT}"
-            f"&address={WALLET_ADDRESS}"
-            f"&tag=latest&apikey=YourApiKeyToken"
-        )
-        r = requests.get(url, timeout=10)
-        data = r.json()
-        if data.get("status") == "1":
-            raw = int(data["result"])
-            return round(raw / 1_000_000, 2)  # USDC tiene 6 decimales
-    except Exception as e:
-        print(f"⚠️ [SALDO] Error consultando wallet: {e}")
-    return None
 
 # ============================================================
 # MOTOR 5: SINCRONIZACIÓN DE POSICIONES
@@ -1031,6 +1046,7 @@ def motor_reporte():
             now = datetime.now(timezone.utc)
 
             # === HEARTBEAT CADA HORA ===
+            actualizar_saldo_inicial()  # actualiza SALDO_INICIAL con el saldo real
             saldo = get_saldo_wallet()
             saldo_txt = f"${saldo}" if saldo is not None else "N/D"
             heartbeat = (
