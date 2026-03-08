@@ -76,11 +76,10 @@ client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
 def get_saldo_wallet():
     """Consulta el saldo USDC.e de la wallet en Polygon via RPC público"""
     if not WALLET_ADDRESS:
+        print(f"⚠️ [SALDO] POLY_WALLET_ADDR no configurada")
         return None
     try:
-        # balanceOf(address) en USDC.e Polygon via RPC público
-        USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"  # USDC.e Polygon
-        # Encode balanceOf(address): selector 0x70a08231 + address padded a 32 bytes
+        USDC_E_CONTRACT = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
         addr_clean = WALLET_ADDRESS.lower().replace("0x", "").zfill(64)
         data_call = "0x70a08231" + addr_clean
         payload = {
@@ -89,13 +88,16 @@ def get_saldo_wallet():
             "id": 1
         }
         proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+        print(f"💰 [SALDO] Consultando {WALLET_ADDRESS[:10]}... via RPC (proxy: {'sí' if proxies else 'no'})")
         r = requests.post("https://polygon-rpc.com", json=payload, timeout=10, proxies=proxies)
+        print(f"💰 [SALDO] Respuesta RPC: status={r.status_code} body={r.text[:100]}")
         result = r.json().get("result", "0x0")
         raw = int(result, 16)
-        saldo = round(raw / 1_000_000, 2)  # USDC.e tiene 6 decimales
+        saldo = round(raw / 1_000_000, 2)
+        print(f"💰 [SALDO] Saldo calculado: ${saldo}")
         return saldo
     except Exception as e:
-        print(f"⚠️ [SALDO] Error consultando wallet: {e}")
+        print(f"⚠️ [SALDO] Error: {e}")
     return None
 
 def actualizar_saldo_inicial():
