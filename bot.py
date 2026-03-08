@@ -103,7 +103,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             # Garantizar mínimo 5 shares para Polymarket
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
             monto_minimo_shares = round(5 * precio_impl + 0.10, 2)  # 5 shares + margen chico
-            monto_final = max(round(STAKE + 0.01, 2), round(monto_minimo_shares, 2))  # mínimo $1.01 para evitar redondeo
+            monto_final = max(1.10, round(monto_minimo_shares, 2))  # mínimo $1.10 con margen holgado
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
@@ -647,7 +647,8 @@ def buscar_mercado_partido_polymarket(home, away):
             away_match = sum(1 for w in away_words if w in pregunta)
             if home_match >= 1 and away_match >= 1:
                 tiene_excluido = any(ex in pregunta for ex in excluir_keywords)
-                if not tiene_excluido:  # descartar directamente si tiene keywords malos
+                es_partido = " vs" in pregunta or " versus" in pregunta
+                if not tiene_excluido and es_partido:
                     candidatos.append(m)
         if candidatos:
             return candidatos[0]
@@ -687,8 +688,8 @@ def motor_deportes():
                     continue
 
                 precio_yes = get_precio_yes(mercado)
-                if not precio_yes or precio_yes <= 0:
-                    continue
+                if not precio_yes or precio_yes <= 0.05 or precio_yes >= 0.95:
+                    continue  # evita mercados extremos o campeonatos long-shot
 
                 market_id = mercado.get("conditionId") or mercado.get("id")
                 pregunta = mercado.get("question", "")
