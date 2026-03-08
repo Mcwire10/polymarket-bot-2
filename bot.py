@@ -284,6 +284,22 @@ def motor_copy_trading():
                         print(f"⏭️ [COPY] Precio {price} fuera de rango, skip")
                         continue
 
+                    # Filtro de frescura: solo copiar trades de las últimas 2 horas
+                    from datetime import datetime, timezone, timedelta
+                    timestamp = trade.get("timestamp") or trade.get("createdAt") or trade.get("time")
+                    if timestamp:
+                        try:
+                            if isinstance(timestamp, (int, float)):
+                                trade_dt = datetime.fromtimestamp(timestamp / 1000 if timestamp > 1e10 else timestamp, tz=timezone.utc)
+                            else:
+                                trade_dt = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+                            edad = datetime.now(timezone.utc) - trade_dt
+                            if edad > timedelta(hours=2):
+                                print(f"⏭️ [COPY] Trade de {wallet[:8]} tiene {edad.seconds//3600}h, muy viejo, skip")
+                                continue
+                        except Exception as e:
+                            print(f"⚠️ [COPY] No se pudo parsear timestamp: {e}")
+
                     print(f"🔔 [COPY] Trade detectado de {wallet[:8]}... | Price: {price}")
                     ejecutar_trade(
                         market_id=asset,
