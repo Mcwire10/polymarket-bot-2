@@ -20,7 +20,7 @@ COPY_MIN_PRICE = 0.20
 COPY_MAX_PRICE = 0.75
 
 # === WALLET ===
-WALLET_ADDRESS = os.environ.get("WALLET_ADDRESS", "")  # dirección pública de la wallet
+WALLET_ADDRESS = os.environ.get("POLY_WALLET_ADDR", "")  # dirección pública de la wallet
 
 # === TRACKING DIARIO ===
 from datetime import datetime, timezone
