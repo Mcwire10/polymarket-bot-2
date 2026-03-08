@@ -71,7 +71,12 @@ else:
     print("⚠️ Sin proxy configurado")
 
 # === SIMMER CLIENT ===
-client = SimmerClient(api_key=SIMMER_API_KEY, venue="polymarket")
+WALLET_PRIVATE_KEY = os.environ.get("WALLET_PRIVATE_KEY", "")
+client = SimmerClient(
+    api_key=SIMMER_API_KEY,
+    venue="polymarket",
+    private_key=WALLET_PRIVATE_KEY if WALLET_PRIVATE_KEY else None
+)
 
 def get_saldo_wallet():
     """Consulta el saldo USDC.e de la wallet en Polygon via RPC público"""
@@ -87,10 +92,26 @@ def get_saldo_wallet():
             "params": [{"to": USDC_E_CONTRACT, "data": data_call}, "latest"],
             "id": 1
         }
-        proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
-        print(f"💰 [SALDO] Consultando {WALLET_ADDRESS[:10]}... via RPC (proxy: {'sí' if proxies else 'no'})")
-        r = requests.post("https://polygon-rpc.com", json=payload, timeout=10, proxies=proxies)
-        print(f"💰 [SALDO] Respuesta RPC: status={r.status_code} body={r.text[:100]}")
+        # RPC sin proxy — los RPCs públicos no necesitan proxy, es tráfico de lectura
+        RPC_ENDPOINTS = [
+            "https://rpc-mainnet.matic.quiknode.pro",
+            "https://matic-mainnet.chainstacklabs.com",
+            "https://rpc.ankr.com/polygon",
+        ]
+        r = None
+        for rpc in RPC_ENDPOINTS:
+            try:
+                print(f"💰 [SALDO] Consultando {WALLET_ADDRESS[:10]}... via {rpc.split('/')[2]}")
+                r = requests.post(rpc, json=payload, timeout=8)
+                if r.status_code == 200 and "result" in r.json():
+                    break
+                print(f"💰 [SALDO] {rpc.split('/')[2]} falló: {r.text[:80]}")
+            except Exception as e:
+                print(f"💰 [SALDO] {rpc} error: {e}")
+                r = None
+        if not r:
+            return None
+        print(f"💰 [SALDO] Respuesta: {r.text[:80]}")
         result = r.json().get("result", "0x0")
         raw = int(result, 16)
         saldo = round(raw / 1_000_000, 2)
