@@ -274,11 +274,22 @@ def get_mercados_polymarket(keywords):
         r = requests.get(url, timeout=10)
         data = r.json()
         if isinstance(data, list):
-            # Filtrar localmente por keywords en la pregunta
+            from datetime import datetime, timezone, timedelta
+            limite_fecha = datetime.now(timezone.utc) + timedelta(days=7)
             for m in data:
                 pregunta = m.get("question", "").lower()
-                if any(kw.lower() in pregunta for kw in keywords):
-                    mercados.append(m)
+                if not any(kw.lower() in pregunta for kw in keywords):
+                    continue
+                # Solo mercados que vencen en los próximos 7 días
+                end_date_str = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
+                if end_date_str:
+                    try:
+                        end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                        if end_date > limite_fecha:
+                            continue
+                    except:
+                        pass
+                mercados.append(m)
     except Exception as e:
         print(f"⚠️ Error obteniendo mercados: {e}")
     return mercados
@@ -639,9 +650,20 @@ def buscar_mercado_partido_polymarket(home, away):
             return None
 
         excluir_keywords = ["o/u", "over", "under", "set ", "handicap", "spread", "total", "quarter", "half", "prime minister", "president", "election", "political"]
+        from datetime import datetime, timezone, timedelta
+        limite_fecha = datetime.now(timezone.utc) + timedelta(days=7)  # solo mercados que vencen en 7 días
         candidatos = []
         for m in mercados:
             pregunta = m.get("question", "").lower()
+            # Filtro de fecha de vencimiento
+            end_date_str = m.get("endDate") or m.get("end_date_iso") or m.get("endDateIso")
+            if end_date_str:
+                try:
+                    end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                    if end_date > limite_fecha:
+                        continue  # vence en más de 7 días, skip
+                except:
+                    pass
             # Requiere match de AMBAS palabras de AMBOS equipos (más estricto)
             home_match = sum(1 for w in home_words if w in pregunta)
             away_match = sum(1 for w in away_words if w in pregunta)
