@@ -915,6 +915,20 @@ POLITICA_MIN_VOLUME = 50000      # Solo mercados con >$50k volumen (evitar slipp
 # Mercados excluidos: elecciones presidenciales USA (mercado muy eficiente)
 POLITICA_EXCLUIR = ["trump", "harris", "biden", "presidential election", "us president"]
 
+def get_simmer_divergencias():
+    """Consulta el endpoint de Simmer para mercados con alta divergencia de precio"""
+    try:
+        url = "https://api.simmer.markets/api/sdk/opportunities"
+        headers = {"Authorization": f"Bearer {SIMMER_API_KEY}"}
+        r = requests.get(url, timeout=10, proxies={"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None)
+        data = r.json()
+        divergencias = data.get("high_divergence", [])
+        print(f"🗳️ [POLITICA] Simmer divergencias encontradas: {len(divergencias)}")
+        return divergencias
+    except Exception as e:
+        print(f"⚠️ [POLITICA] Error obteniendo divergencias Simmer: {e}")
+        return []
+
 def get_mercados_politica():
     """Busca mercados políticos activos en Polymarket con vencimiento <= 90 días y volumen > $50k"""
     try:
@@ -1047,8 +1061,46 @@ def motor_politica():
     time.sleep(120)  # arrancar después de los otros motores
     while True:
         try:
+            # === FUENTE 1: Divergencias IA de Simmer ===
+            divergencias = get_simmer_divergencias()
+            for div in divergencias:
+                market_id = div.get("market_id") or div.get("id")
+                if not market_id or market_id in mercados_politica_apostados:
+                    continue
+
+                pregunta_div = div.get("question", "").lower()
+                if not any(kw in pregunta_div for kw in POLITICA_KEYWORDS):
+                    continue
+                if any(ex in pregunta_div for ex in POLITICA_EXCLUIR):
+                    continue
+
+                simmer_price = float(div.get("simmer_price", 0) or 0)
+                external_price = float(div.get("external_price", 0) or 0)
+                freshness = div.get("signal_freshness", "stale")
+
+                if freshness == "stale" or simmer_price <= 0 or external_price <= 0:
+                    continue
+
+                edge = simmer_price - external_price
+                print(f"🗳️ [POLITICA] Simmer: {pregunta_div[:50]} | AI: {simmer_price:.2f} | Market: {external_price:.2f} | Edge: {edge:.2f} | {freshness}")
+
+                if abs(edge) >= EDGE_THRESHOLD_POLITICA:
+                    side = "yes" if edge > 0 else "no"
+                    registrar_senal("politica", pregunta_div, side, abs(edge))
+                    print(f"🎯 [POLITICA] Simmer edge! {side.upper()} | {pregunta_div[:60]}")
+                    ok = ejecutar_trade(
+                        market_id=market_id,
+                        side=side,
+                        razon=f"Bot politica | Simmer divergencia ({freshness})",
+                        precio_ref=external_price if side == "yes" else (1 - external_price),
+                    )
+                    if ok:
+                        mercados_politica_apostados.add(market_id)
+                time.sleep(1)
+
+            # === FUENTE 2: Mean reversion por historial de precio ===
             mercados = get_mercados_politica()
-            print(f"🗳️ [POLITICA] {len(mercados)} mercados políticos encontrados (volumen>$50k, no USA presidencial)")
+            print(f"🗳️ [POLITICA] {len(mercados)} mercados políticos (volumen>$50k, no USA presidencial)")
 
             for mercado in mercados:
                 market_id = mercado.get("conditionId") or mercado.get("id")
@@ -1060,17 +1112,16 @@ def motor_politica():
                 if not precio_yes or precio_yes <= 0.05 or precio_yes >= 0.95:
                     continue
 
-                # Estrategia 1: mean reversion por historial de precio
                 resultado_history = get_prob_politica_polymarket_history(market_id)
                 if resultado_history:
                     prob_estimada, razon = resultado_history
                     edge = prob_estimada - precio_yes
-                    print(f"🗳️ [POLITICA] {pregunta[:60]} | Estimado: {prob_estimada:.2f} | Poly: {precio_yes:.2f} | Edge: {edge:.2f} ({razon})")
+                    print(f"🗳️ [POLITICA] MR: {pregunta[:60]} | Est: {prob_estimada:.2f} | Poly: {precio_yes:.2f} | Edge: {edge:.2f}")
 
-                    if abs(edge) >= EDGE_THRESHOLD_POLITICA:  # 15% recomendado por Gemini
+                    if abs(edge) >= EDGE_THRESHOLD_POLITICA:
                         side = "yes" if edge > 0 else "no"
                         registrar_senal("politica", pregunta, side, abs(edge))
-                        print(f"🎯 [POLITICA] Edge! {side.upper()} | {pregunta[:60]}")
+                        print(f"🎯 [POLITICA] Mean reversion edge! {side.upper()} | {pregunta[:60]}")
                         ok = ejecutar_trade(
                             market_id=market_id,
                             side=side,
@@ -1092,6 +1143,38 @@ def motor_politica():
 # ============================================================
 # MOTOR 6: REPORTE DIARIO + HEARTBEAT
 # ============================================================
+def get_trade_journal():
+    """Consulta el historial real de trades desde Simmer API"""
+    try:
+        url = "https://api.simmer.markets/api/sdk/trades"
+        headers = {"Authorization": f"Bearer {SIMMER_API_KEY}"}
+        proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
+        r = requests.get(url, headers=headers, timeout=10, proxies=proxies)
+        data = r.json()
+        trades = data if isinstance(data, list) else data.get("trades", data.get("data", []))
+        return trades
+    except Exception as e:
+        print(f"⚠️ [JOURNAL] Error obteniendo trades: {e}")
+        return []
+
+def get_win_rate_por_motor(trades):
+    """Calcula win rate por motor/source a partir del journal de Simmer"""
+    stats = {}
+    for t in trades:
+        source = t.get("source", "unknown")
+        outcome = t.get("outcome")  # "win", "loss", "pending"
+        if source not in stats:
+            stats[source] = {"wins": 0, "losses": 0, "pending": 0, "pnl": 0.0}
+        if outcome == "win":
+            stats[source]["wins"] += 1
+            stats[source]["pnl"] += float(t.get("pnl", 0) or 0)
+        elif outcome == "loss":
+            stats[source]["losses"] += 1
+            stats[source]["pnl"] += float(t.get("pnl", 0) or 0)
+        else:
+            stats[source]["pending"] += 1
+    return stats
+
 def motor_reporte():
     """Cada hora envía saldo al Telegram. A las 23:00 UTC manda reporte del día."""
     global senales_del_dia, trades_del_dia
@@ -1142,6 +1225,17 @@ def motor_reporte():
                 trades_ok = [t for t in t_copy if t["ok"]]
                 trades_fail = [t for t in t_copy if not t["ok"]]
 
+                # Trade journal desde Simmer (datos reales con outcomes)
+                journal = get_trade_journal()
+                win_stats = get_win_rate_por_motor(journal)
+                journal_txt = ""
+                if win_stats:
+                    journal_txt = "\n📓 WIN RATE POR MOTOR (histórico):\n"
+                    for motor, s in win_stats.items():
+                        total = s["wins"] + s["losses"]
+                        wr = s["wins"] / total * 100 if total > 0 else 0
+                        journal_txt += f"  {motor}: {wr:.0f}% ({s['wins']}W/{s['losses']}L) | P&L: ${s['pnl']:.2f}\n"
+
                 reporte = (
                     f"📊 REPORTE DIARIO — {now.strftime('%d/%m/%Y')}\n"
                     f"{'='*30}\n"
@@ -1152,6 +1246,7 @@ def motor_reporte():
                     f"\n"
                     f"✅ Trades ejecutados: {len(trades_ok)}\n"
                     f"❌ Trades fallidos: {len(trades_fail)}\n"
+                    f"{journal_txt}"
                 )
                 if trades_ok:
                     reporte += "\nDetalle trades OK:\n"
