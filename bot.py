@@ -309,10 +309,25 @@ def motor_copy_trading():
                         print(f"⏭️ [COPY] Volumen ${volumen:.0f} < $50k, skip")
                         continue
 
-                    # Filtro slippage: precio actual no debe ser > 3% más caro que el del trader
-                    precio_actual = price  # se refinará en ejecutar_trade
+                    # REGLA DE ABORTO: si precio subió >3% desde que el trader entró → somos exit liquidity
                     slippage_max = price * 1.03
-                    print(f"🔔 [COPY] Trade detectado de {wallet[:8]}... | Price: {price} | Slippage máx: {slippage_max:.3f}")
+                    try:
+                        mkt_check = client.get_market(asset) if hasattr(client, 'get_market') else None
+                        precio_ahora = None
+                        if mkt_check:
+                            if isinstance(mkt_check, dict):
+                                precio_ahora = float(mkt_check.get("bestAsk") or mkt_check.get("price") or 0) or None
+                            elif hasattr(mkt_check, 'bestAsk'):
+                                precio_ahora = float(getattr(mkt_check, 'bestAsk', 0) or 0) or None
+                        if precio_ahora and precio_ahora > slippage_max:
+                            pct = ((precio_ahora / price) - 1) * 100
+                            print(f"🚫 [COPY] ABORT — precio actual {precio_ahora:.3f} > máx {slippage_max:.3f} (+{pct:.1f}%). Exit liquidity, skip.")
+                            continue
+                        elif precio_ahora:
+                            print(f"✅ [COPY] Precio OK: actual={precio_ahora:.3f} entrada={price:.3f} slippage={((precio_ahora/price)-1)*100:.1f}%")
+                    except Exception as e:
+                        print(f"⚠️ [COPY] No se pudo verificar precio actual: {e}")
+                    print(f"🔔 [COPY] Ejecutando copia de {wallet[:8]}... | Price entrada: {price} | Slippage máx: {slippage_max:.3f}")
                     ejecutar_trade(
                         market_id=asset,
                         side="yes",
@@ -1464,17 +1479,18 @@ print(f"₿  Bot crypto: CoinGecko + Binance | Edge mínimo: {EDGE_THRESHOLD_CRY
 print(f"⚽ Bot deportes: The Odds API | Edge mínimo: {EDGE_THRESHOLD_SPORTS*100:.0f}%")
 print(f"💰 Stake fijo: ${STAKE}")
 notify(
-    f"🤖 Bot iniciado con 7 motores!\n"
+    f"🤖 Bot iniciado — 6 motores activos\n"
     f"💰 Stake: ${STAKE}\n"
-    f"👀 Copiando {len(TRADERS)} traders\n"
-    f"🌦️ Bot climático activo\n"
-    f"₿ Bot crypto activo\n"
-    f"⚽ Bot deportes activo"
+    f"👀 Copy trading: {len(TRADERS)} traders (latencia 15min)\n"
+    f"🌦️ Clima activo (sync GFS)\n"
+    f"🗳️ Política activa (pausada si saldo < $5)\n"
+    f"⚽ Deportes activo\n"
+    f"₿ Crypto: APAGADO (competencia HFT institucional)"
 )
 
 t1 = threading.Thread(target=motor_copy_trading, daemon=True)
 t2 = threading.Thread(target=motor_climatico, daemon=True)
-t3 = threading.Thread(target=motor_crypto, daemon=True)
+# t3 motor_crypto APAGADO — competencia institucional HFT insuperable con API polling
 t4 = threading.Thread(target=motor_deportes, daemon=True)
 t5 = threading.Thread(target=motor_sincronizacion, daemon=True)
 t6 = threading.Thread(target=motor_reporte, daemon=True)
@@ -1482,7 +1498,6 @@ t7 = threading.Thread(target=motor_politica, daemon=True)
 
 t1.start()
 t2.start()
-t3.start()
 t4.start()
 t5.start()
 t6.start()
