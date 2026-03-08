@@ -192,7 +192,6 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             if monto_minimo > STAKE:
                 # El mercado es muy caro para nuestro stake — skip
                 print(f"⏭️ Skip: precio muy alto ({precio_impl:.2f}), necesita ${monto_minimo} para 5 shares mínimas")
-                trades_abiertos -= 1
                 return False
             monto_final = STAKE
 
@@ -202,13 +201,13 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
                 print(f"⏭️ Skip: necesita ${monto_final} pero presupuesto disponible es ${presupuesto_disponible}")
                 return False
 
-            trades_abiertos += 1
             # Slippage: subir 2% el precio para cruzar el spread y asegurar fill
             precio_con_slippage = None
             if precio_impl and 0 < precio_impl < 1:
                 precio_con_slippage = round(min(precio_impl * 1.02, 0.95), 4)
 
             print(f"💵 Monto trade: ${monto_final} (precio ref: {precio_impl:.2f} → con slippage: {precio_con_slippage})")
+            trades_abiertos += 1
             trade_kwargs = dict(market_id=trade_id, side=side, amount=monto_final, order_type="GTC", allow_rebuy=True)
             if precio_con_slippage:
                 trade_kwargs["price"] = precio_con_slippage
@@ -358,6 +357,46 @@ def get_precipitacion_prob(ciudad):
         print(f"⚠️ [CLIMA] Error Open-Meteo para {ciudad}: {e}")
         return None
 
+def get_temperatura_max(ciudad):
+    """Obtiene temperatura máxima pronosticada en °C y °F"""
+    coords = CIUDADES.get(ciudad)
+    if not coords:
+        return None, None
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={coords['lat']}&longitude={coords['lon']}"
+        f"&daily=temperature_2m_max"
+        f"&forecast_days=1&timezone=auto"
+        f"&temperature_unit=celsius"
+    )
+    try:
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        temp_c = data["daily"]["temperature_2m_max"][0]
+        temp_f = round(temp_c * 9/5 + 32, 1)
+        return round(temp_c, 1), temp_f
+    except Exception as e:
+        print(f"⚠️ [CLIMA] Error temperatura para {ciudad}: {e}")
+        return None, None
+
+def prob_temperatura_bucket(temp_real, temp_objetivo, margen=0.7):
+    """
+    Convierte la temperatura real en probabilidad de que caiga en el bucket del mercado.
+    Si el pronóstico está dentro del margen del bucket → prob alta.
+    Si está lejos → prob baja.
+    """
+    if temp_real is None:
+        return None
+    diferencia = abs(temp_real - temp_objetivo)
+    if diferencia <= margen:
+        return 0.80  # muy probable
+    elif diferencia <= margen * 2:
+        return 0.50
+    elif diferencia <= margen * 3:
+        return 0.20
+    else:
+        return 0.05  # muy improbable
+
 def get_mercados_polymarket(keywords):
     """Busca mercados filtrando por pregunta localmente — más confiable que el search de Polymarket"""
     mercados = []
@@ -416,7 +455,31 @@ def analizar_mercado_clima(mercado):
     if not any(w in pregunta for w in palabras_clima):
         return None
 
-    prob_real = get_precipitacion_prob(ciudad_detectada)
+    # Detectar tipo de mercado: temperatura o precipitación
+    es_temperatura = any(w in pregunta for w in ["°c", "°f", "celsius", "fahrenheit", "degrees", "temperature", "highest temp", "high temp"])
+    es_precipitacion = any(w in pregunta for w in ["rain", "rainfall", "precipitation", "storm", "snow", "flood"])
+
+    if es_temperatura:
+        # Extraer temperatura objetivo de la pregunta
+        import re
+        nums = re.findall(r'[-+]?\d+(?:\.\d+)?', pregunta)
+        if not nums:
+            return None
+        temp_objetivo = float(nums[0])
+        # Determinar si es Celsius o Fahrenheit
+        es_fahrenheit = "°f" in pregunta or "fahrenheit" in pregunta or "f on" in pregunta or "-" in pregunta and "f" in pregunta
+        temp_c, temp_f = get_temperatura_max(ciudad_detectada)
+        if temp_c is None:
+            return None
+        temp_comparar = temp_f if es_fahrenheit else temp_c
+        prob_real = prob_temperatura_bucket(temp_comparar, temp_objetivo)
+        print(f"📊 [CLIMA] {ciudad_detectada} | Temp real: {temp_comparar}{'°F' if es_fahrenheit else '°C'} | Objetivo: {temp_objetivo} | Prob bucket: {prob_real:.2f}")
+    elif es_precipitacion:
+        prob_real = get_precipitacion_prob(ciudad_detectada)
+        print(f"📊 [CLIMA] {ciudad_detectada} | Mercado: {precio_yes:.2f} | Open-Meteo lluvia: {prob_real:.2f}")
+    else:
+        return None
+
     if prob_real is None:
         return None
 
