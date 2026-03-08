@@ -186,9 +186,15 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
             simmer_id = importar_mercado(market_id, slug=slug)
             trade_id = simmer_id or market_id
 
-            # Monto fijo = STAKE siempre. Polymarket acepta $1 mínimo.
-            monto_final = STAKE
+            # Monto fijo = STAKE. Verificar mínimo 5 shares de Polymarket.
             precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
+            monto_minimo = round(5 * precio_impl + 0.05, 2)  # 5 shares mínimo
+            if monto_minimo > STAKE:
+                # El mercado es muy caro para nuestro stake — skip
+                print(f"⏭️ Skip: precio muy alto ({precio_impl:.2f}), necesita ${monto_minimo} para 5 shares mínimas")
+                trades_abiertos -= 1
+                return False
+            monto_final = STAKE
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
