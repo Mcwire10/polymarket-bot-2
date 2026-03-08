@@ -188,6 +188,7 @@ def ejecutar_trade(market_id, side, razon, precio_ref=None, slug=None):
 
             # Monto fijo = STAKE siempre. Polymarket acepta $1 mínimo.
             monto_final = STAKE
+            precio_impl = precio_ref if isinstance(precio_ref, float) and 0 < precio_ref < 1 else 0.5
 
             # Verificar que el monto final no exceda el presupuesto disponible
             presupuesto_disponible = round(SALDO_INICIAL * MAX_PORCENTAJE_SALDO - gasto_actual, 2)
